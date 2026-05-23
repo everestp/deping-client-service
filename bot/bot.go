@@ -41,7 +41,6 @@ func NewBot(token string, telegramService services.TelegramService, alertService
 	}, nil
 }
 
-// SetAlertService resolves the circular dependency after initialization
 func (b *Bot) SetAlertService(svc services.AlertService) {
 	b.alertService = svc
 	b.registerHandlers()
@@ -69,95 +68,128 @@ func (b *Bot) withAuth(next tele.HandlerFunc) tele.HandlerFunc {
 	return func(c tele.Context) error {
 		tu, err := b.telegramRepo.GetTelegramUserByChatID(context.Background(), c.Sender().ID)
 		if err != nil || tu == nil || !tu.IsVerified {
-			return c.Send("Authentication required. Please link your account at https://deping.xyz/settings.")
+			return c.Send("🚫 *Access Denied*\nPlease link your account first: [deping.xyz](https://deping.xyz/settings)", tele.ModeMarkdown)
 		}
 		return next(c)
 	}
 }
 
+// ── Handlers ─────────────────────────────────────────────────────────────
+
 func (b *Bot) handleStart(c tele.Context) error {
-	ctx := context.Background()
-	tu, err := b.telegramRepo.GetTelegramUserByUsername(ctx, c.Sender().Username)
-	if err != nil || tu == nil {
-		return c.Send("Access Denied. Your Telegram account is not linked to any deping.xyz profile.")
+	tu, _ := b.telegramRepo.GetTelegramUserByUsername(context.Background(), c.Sender().Username)
+	if tu == nil {
+		return c.Send("👋 *Welcome to DePIN Monitor*\n\nPlease link your Telegram via [deping.xyz](https://deping.xyz/settings) to begin.", tele.ModeMarkdown)
 	}
 
-	_ = b.telegramRepo.UpdateChatID(ctx, tu.UserID, c.Sender().ID)
-
+	_ = b.telegramRepo.UpdateChatID(context.Background(), tu.UserID, c.Sender().ID)
 	if tu.IsVerified {
-		return c.Send("Welcome back. Use /help to see available commands.")
+		return c.Send("✅ *Account Linked!*\nUse /help to explore available commands.", tele.ModeMarkdown)
 	}
-	return c.Send("Authentication required. Please send your code: /verify <code>")
+	return c.Send("⚠️ *Pending Verification*\nPlease verify using: `/verify <code>`", tele.ModeMarkdown)
+}
+
+func (b *Bot) handleHelp(c tele.Context) error {
+	return c.Send("🤖 *DePIN Assistant Commands*\n\n"+
+		"📡 /monitor - View active infrastructure\n"+
+		"📊 /status - System summary\n"+
+		"💰 /credits - Check balance", tele.ModeMarkdown)
+}
+
+func (b *Bot) handleVerify(c tele.Context) error {
+	args := c.Args()
+	if len(args) == 0 {
+		return c.Send("Usage: `/verify <code>`", tele.ModeMarkdown)
+	}
+	_, err := b.telegramService.VerifyLink(context.Background(), strings.TrimSpace(args[0]), c.Sender().ID, c.Sender().Username)
+	if err != nil {
+		return c.Send("❌ *Verification failed.* Please check your code and try again.", tele.ModeMarkdown)
+	}
+	return c.Send("✨ *Account successfully linked!*", tele.ModeMarkdown)
+}
+
+func (b *Bot) handleMonitor(c tele.Context) error {
+	summaries, _ := b.telegramRepo.GetUserMonitorSummaries(context.Background(), c.Sender().ID)
+	if len(summaries) == 0 {
+		return c.Send("🔍 *No monitors registered.* Add them at [deping.xyz](https://deping.xyz).", tele.ModeMarkdown)
+	}
+
+	menu := &tele.ReplyMarkup{}
+	var rows []tele.Row
+	for _, s := range summaries {
+		btn := menu.Data(fmt.Sprintf("📡 %s", s.TargetURL), "show_monitor", s.ID)
+		rows = append(rows, menu.Row(btn))
+	}
+	menu.Inline(rows...)
+	return c.Send("📋 *Select a monitor to inspect:*", menu)
+}
+
+func (b *Bot) handleShowMonitor(c tele.Context) error {
+	monitorID := c.Callback().Data
+	pings, _ := b.telegramRepo.GetRecentPings(context.Background(), monitorID, 5)
+
+	var sb strings.Builder
+	sb.WriteString("⏱ *Recent Pings (Last 5):*\n\n")
+	for _, p := range pings {
+		status := "✅"
+		if !p.Success { status = "❌" }
+		sb.WriteString(fmt.Sprintf("%s `[%s]` | %dms\n", status, p.Timestamp.Format("15:04"), p.LatencyMs))
+	}
+
+	menu := &tele.ReplyMarkup{}
+	menu.Inline(menu.Row(menu.Data("🔔 Toggle Notifications", "toggle_notify", monitorID)))
+	return c.Edit(sb.String(), menu, tele.ModeMarkdown)
 }
 
 func (b *Bot) handleToggleNotify(c tele.Context) error {
 	ctx := context.Background()
 	monitorID := c.Callback().Data
-
 	tu, _ := b.telegramRepo.GetTelegramUserByChatID(ctx, c.Sender().ID)
 	current, _ := b.telegramService.GetNotificationStatus(ctx, tu.UserID, monitorID)
 
 	err := b.telegramService.ToggleNotification(ctx, tu.UserID, monitorID, !current)
 	if err != nil {
-		return c.Respond(&tele.CallbackResponse{Text: "Failed to update settings."})
+		return c.Respond(&tele.CallbackResponse{Text: "❌ Failed to update settings"})
 	}
 
-	return c.Respond(&tele.CallbackResponse{Text: "Notification settings updated."})
-}
-
-// ... (handleHelp, handleVerify, handleMonitor, handleShowMonitor, handleCredits, handleStatus remain as defined previously)
-
-func (b *Bot) handleHelp(c tele.Context) error {
-	return c.Send("deping.xyz Monitor\n/monitor - Active status\n/status - System summary\n/credits - Balance")
-}
-
-func (b *Bot) handleVerify(c tele.Context) error {
-	args := c.Args()
-	if len(args) == 0 { return c.Send("Usage: /verify <code>") }
-	_, err := b.telegramService.VerifyLink(context.Background(), strings.TrimSpace(args[0]), c.Sender().ID, c.Sender().Username)
-	if err != nil { return c.Send("Verification failed.") }
-	return c.Send("Linked successfully.")
-}
-
-func (b *Bot) handleMonitor(c tele.Context) error {
-    summaries, _ := b.telegramRepo.GetUserMonitorSummaries(context.Background(), c.Sender().ID)
-    menu := &tele.ReplyMarkup{}
-    var rows []tele.Row
-    for _, s := range summaries {
-        btn := menu.Data(fmt.Sprintf("%s | %s", "MONITOR", s.TargetURL), "show_monitor", s.ID)
-        rows = append(rows, menu.Row(btn))
-    }
-    menu.Inline(rows...)
-    return c.Send("Select monitor:", menu)
-}
-
-func (b *Bot) handleShowMonitor(c tele.Context) error {
-    monitorID := c.Callback().Data
-    pings, _ := b.telegramRepo.GetRecentPings(context.Background(), monitorID, 5)
-    var sb strings.Builder
-    for _, p := range pings { sb.WriteString(fmt.Sprintf("[%s] %v | %dms\n", p.Timestamp.Format("15:04"), p.Success, p.LatencyMs)) }
-    menu := &tele.ReplyMarkup{}
-    menu.Inline(menu.Row(menu.Data("Toggle Notify", "toggle_notify", monitorID)))
-    return c.Send(sb.String(), menu)
+	msg := "Notifications Disabled 🔕"
+	if !current { msg = "Notifications Enabled 🔔" }
+	return c.Respond(&tele.CallbackResponse{Text: msg})
 }
 
 func (b *Bot) handleCredits(c tele.Context) error {
-    tu, _ := b.telegramRepo.GetTelegramUserByChatID(context.Background(), c.Sender().ID)
-    status, _ := b.telegramService.GetCreditStatus(context.Background(), tu.UserID)
-    return c.Send(fmt.Sprintf("Credits: %d", status.TotalCreditsLeft))
+    ctx := context.Background()
+    tu, err := b.telegramRepo.GetTelegramUserByChatID(ctx, c.Sender().ID)
+    if err != nil {
+        return c.Send("❌ *Error fetching balance.*")
+    }
+
+    status, err := b.telegramService.GetCreditStatus(ctx, tu.UserID)
+    if err != nil {
+        return c.Send("⚠️ *Could not retrieve credit data.*")
+    }
+
+    // Best practice: Show everything so the user isn't guessing
+    msg := fmt.Sprintf(
+        "💰 *Account Credit Summary*\n\n"+
+        "Total Available: `%d`\n"+
+        "Free Credits Used: `%d`\n"+
+        "Remaining Free: `%d`\n\n"+
+        "📅 *Next Reset:* `%s`",
+        status.TotalCreditsLeft,
+        status.FreeCreditsUsed,
+        status.FreeCreditsLeft,
+        status.FreeResetDate,
+    )
+    return c.Send(msg, tele.ModeMarkdown)
 }
 
 func (b *Bot) handleStatus(c tele.Context) error {
-    summaries, _ := b.telegramRepo.GetUserMonitorSummaries(context.Background(), c.Sender().ID)
-    return c.Send(fmt.Sprintf("Total Monitors: %d", len(summaries)))
+	summaries, _ := b.telegramRepo.GetUserMonitorSummaries(context.Background(), c.Sender().ID)
+	return c.Send(fmt.Sprintf("📊 *System Overview*\nTotal Active Monitors: `%d`", len(summaries)), tele.ModeMarkdown)
 }
 
-// bot/bot.go
-
-// SendMessage implements the services.MessageSender interface.
 func (b *Bot) SendMessage(ctx context.Context, chatID int64, text string) error {
-    // telebot.v3 doesn't strictly require context for Send,
-    // but the interface requires it.
-    _, err := b.tele.Send(&tele.Chat{ID: chatID}, text, tele.ModeMarkdown)
-    return err
+	_, err := b.tele.Send(&tele.Chat{ID: chatID}, text, tele.ModeMarkdown)
+	return err
 }

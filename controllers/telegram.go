@@ -2,10 +2,13 @@ package controllers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 
 	"github.com/everestp/deping-client-service/dto"
+	"github.com/everestp/deping-client-service/pkg/contextutils"
+
 	"github.com/everestp/deping-client-service/services"
 )
 
@@ -25,21 +28,25 @@ func NewTelegramController(ts services.TelegramService) *TelegramController {
 //
 // Returns a verification code the user must send to the bot.
 func (tc *TelegramController) InitiateLink(w http.ResponseWriter, r *http.Request) {
-	userID := userIDFromContext(r.Context()) // set by JWT middleware
+    userID := userIDFromContext(r.Context())
 
-	var req dto.LinkTelegramRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.TelegramUsername == "" {
-		writeJSON(w, http.StatusBadRequest, dto.ErrorResponse{Error: "telegram_username is required"})
-		return
-	}
+    var req dto.LinkTelegramRequest
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.TelegramUsername == "" {
+        writeJSON(w, http.StatusBadRequest, dto.ErrorResponse{Error: "telegram_username is required"})
+        return
+    }
 
-	resp, err := tc.telegramService.InitiateLink(r.Context(), userID, req.TelegramUsername)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, dto.ErrorResponse{Error: "could not initiate link"})
-		return
-	}
+    resp, err := tc.telegramService.InitiateLink(r.Context(), userID, req.TelegramUsername)
+    if err != nil {
+        // Log the actual error to your terminal
+        fmt.Errorf("InitiateLink failed", "error", err, "userID", userID)
 
-	writeJSON(w, http.StatusOK, resp)
+        // Return the specific error to the frontend (temporarily)
+        writeJSON(w, http.StatusInternalServerError, dto.ErrorResponse{Error: err.Error()})
+        return
+    }
+
+    writeJSON(w, http.StatusOK, resp)
 }
 
 // GET /api/telegram/credits
@@ -143,18 +150,21 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 // userIDFromContext retrieves the user_id set by JWT middleware.
 // Adjust the key type to match your middleware implementation.
 func userIDFromContext(ctx interface{ Value(key interface{}) interface{} }) int {
-	v := ctx.Value("user_id")
-	if v == nil {
-		return 0
-	}
-	switch id := v.(type) {
-	case int:
-		return id
-	case float64:
-		return int(id)
-	case string:
-		n, _ := strconv.Atoi(id)
-		return n
-	}
-	return 0
+    // Look up using the EXACT constant used by the middleware
+v := ctx.Value(contextutils.UserIDKey)
+    if v == nil {
+        return 0
+    }
+
+    switch id := v.(type) {
+    case int:
+        return id
+    case float64:
+        return int(id)
+    case string:
+        n, _ := strconv.Atoi(id)
+        return n
+    default:
+        return 0
+    }
 }
