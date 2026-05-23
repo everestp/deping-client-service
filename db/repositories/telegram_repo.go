@@ -59,6 +59,9 @@ type TelegramRepository interface {
 	GetTelegramUserByCode(ctx context.Context, code string) (*TelegramUser, error)
 	GetTelegramUserByChatID(ctx context.Context, chatID int64) (*TelegramUser, error)
 	VerifyTelegramUser(ctx context.Context, userID int, chatID int64, username string) error
+	GetTelegramUserByUsername(ctx context.Context, username string) (*TelegramUser, error)
+	UpdateChatID(ctx context.Context, userID int, chatID int64) error
+
 
 	// Credits
 	GetCreditStatus(ctx context.Context, userID int) (*TelegramCredit, error)
@@ -136,7 +139,29 @@ func (r *postgressTelegramRepo) GetTelegramUserByChatID(ctx context.Context, cha
 		WHERE telegram_chat_id = $1 AND deleted_at IS NULL`
 	return r.scanTelegramUser(r.db.QueryRowContext(ctx, q, chatID))
 }
+// GetTelegramUserByUsername finds a pending user record by their Telegram handle.
+func (r *postgressTelegramRepo) GetTelegramUserByUsername(ctx context.Context, username string) (*TelegramUser, error) {
+    const q = `
+        SELECT id, user_id, telegram_chat_id, telegram_username, verification_code,
+               is_verified, last_reminded_at, created_at
+        FROM telegram_users
+        WHERE telegram_username = $1 AND deleted_at IS NULL`
 
+    // Note: If a user changes their handle, this might return nothing.
+    // Your UI should advise users to re-link if they change their @handle.
+    return r.scanTelegramUser(r.db.QueryRowContext(ctx, q, username))
+}
+
+// UpdateChatID saves the user's permanent ChatID after they trigger the bot.
+func (r *postgressTelegramRepo) UpdateChatID(ctx context.Context, userID int, chatID int64) error {
+    const q = `
+        UPDATE telegram_users
+        SET telegram_chat_id = $2, updated_at = NOW()
+        WHERE user_id = $1`
+
+    _, err := r.db.ExecContext(ctx, q, userID, chatID)
+    return err
+}
 func (r *postgressTelegramRepo) VerifyTelegramUser(ctx context.Context, userID int, chatID int64, username string) error {
 	const q = `
 		UPDATE telegram_users
