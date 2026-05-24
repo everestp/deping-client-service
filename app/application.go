@@ -1,155 +1,117 @@
 package app
 
 import (
-    "context"
-    "database/sql"
-    "fmt"
-    "log/slog"
-    "net/http"
-    "os"
-    "os/signal"
-    "syscall"
-    "time"
+	"context"
+	"database/sql"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
-    _ "github.com/lib/pq"
-    amqp "github.com/rabbitmq/amqp091-go"
-    "github.com/rs/cors"
-
-    "github.com/everestp/deping-client-service/bot"
-    "github.com/everestp/deping-client-service/config/env"
-    "github.com/everestp/deping-client-service/controllers"
-    "github.com/everestp/deping-client-service/db/repositories"
-    "github.com/everestp/deping-client-service/router"
-    "github.com/everestp/deping-client-service/services"
+	"github.com/everestp/deping-client-service/bot"
+	"github.com/everestp/deping-client-service/config/env"
+	"github.com/everestp/deping-client-service/controllers"
+	"github.com/everestp/deping-client-service/db/repositories"
+	"github.com/everestp/deping-client-service/router"
+	"github.com/everestp/deping-client-service/services"
+	_ "github.com/lib/pq"
+	amqp "github.com/rabbitmq/amqp091-go"
+	"github.com/redis/go-redis/v9"
+	"github.com/rs/cors"
 )
 
 type Application struct {
     cfg      *env.Config
     db       *sql.DB
+    rdb      *redis.Client
     amqpConn *amqp.Connection
-    httpSrv  *http.Server
     bot      *bot.Bot
-    consumer services.ConsumerService
+    httpSrv  *http.Server
     log      *slog.Logger
+    consumer  services.ConsumerService
 }
 
 func New(cfg *env.Config) (*Application, error) {
-    log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-        Level: slog.LevelInfo,
-    }))
+    log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
-    // 1. Database Connection
-    db, err := sql.Open("postgres", cfg.DatabaseURL)
-    if err != nil {
-        return nil, fmt.Errorf("open db: %w", err)
-    }
-    db.SetMaxOpenConns(25)
-    db.SetMaxIdleConns(10)
-    db.SetConnMaxLifetime(5 * time.Minute)
+    // 1. Core Infrastructure
+    db, _ := sql.Open("postgres", cfg.DatabaseURL)
+    rdb := redis.NewClient(&redis.Options{Addr: cfg.RabbitMQURL})
+    amqpConn, _ := amqp.Dial(cfg.RabbitMQURL)
+    rabbitCh, _ := amqpConn.Channel()
 
-    if err := db.Ping(); err != nil {
-        return nil, fmt.Errorf("ping db: %w", err)
-    }
-    log.Info("database connected")
-
-    // 2. RabbitMQ Connection
-    amqpConn, err := amqp.Dial(cfg.RabbitMQURL)
-    if err != nil {
-        return nil, fmt.Errorf("rabbitmq dial: %w", err)
-    }
-    log.Info("RabbitMQ connected")
-
-    // 3. Dependency Graph
+    // 2. Storage Layer
     storage := repositories.NewStorage(db)
-    userService := services.NewUserService(storage.Users, cfg.JWTSecret)
-    telegramService := services.NewTelegramService(storage.Telegram, cfg.TelegramBotUsername, log)
 
-    // 4. Bot & Alert Service (Circular Dependency Resolution)
-    teleBot, err := bot.NewBot(cfg.TelegramBotToken, telegramService, nil, storage.Telegram, log)
-    if err != nil {
-        return nil, fmt.Errorf("create bot: %w", err)
-    }
+    // 3. Services
+    userSvc := services.NewUserService(storage.Users, cfg.JWTSecret)
+    teleSvc := services.NewTelegramService(storage.Telegram, cfg.TelegramBotUsername, log)
+    monitorSvc := services.NewMonitorService(storage, rdb, rabbitCh, cfg)
 
+    // 4. Bot Initialization
+    teleBot, _ := bot.NewBot(cfg.TelegramBotToken, teleSvc, nil, storage.Telegram, log)
     alertSvc := services.NewAlertService(storage.Telegram, teleBot, log)
     teleBot.SetAlertService(alertSvc)
+    // 5. Consumer Initialization (REQUIRED for pings to process)
 
-    // 5. RabbitMQ Consumer
     consumer, err := services.NewConsumerService(amqpConn, alertSvc, log)
-    if err != nil {
-        return nil, fmt.Errorf("create consumer: %w", err)
-    }
+    if err != nil { return nil, err }
 
-    // 6. HTTP Server
-    userCtrl := controllers.NewUserController(userService)
-    telegramCtrl := controllers.NewTelegramController(telegramService)
-    httpRouter := router.SetupRouter(userCtrl, telegramCtrl, userService)
+    // 6. Controllers
+    userCtrl := controllers.NewUserController(userSvc)
+    teleCtrl := controllers.NewTelegramController(teleSvc)
+    monitorCtrl := controllers.NewMonitorController(monitorSvc)
 
-    c := cors.New(cors.Options{
-        AllowedOrigins:   []string{"*"},
-        AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-        AllowedHeaders:   []string{"Authorization", "Content-Type"},
-        AllowCredentials: true,
-    })
+    // 6. HTTP Server Setup
+    httpRouter := router.SetupRouter(userCtrl, monitorCtrl, teleCtrl, userSvc)
 
     httpSrv := &http.Server{
-        Addr:         ":" + cfg.HTTPPort,
-        Handler:      c.Handler(httpRouter),
-        ReadTimeout:  15 * time.Second,
-        WriteTimeout: 15 * time.Second,
+        Addr:    ":" + cfg.HTTPPort,
+        Handler: cors.Default().Handler(httpRouter),
     }
 
     return &Application{
         cfg:      cfg,
         db:       db,
+        rdb:      rdb,
         amqpConn: amqpConn,
-        httpSrv:  httpSrv,
         bot:      teleBot,
-        consumer: consumer,
+        httpSrv:  httpSrv,
         log:      log,
+        consumer: consumer,
     }, nil
 }
 
 func (a *Application) Run() error {
-    ctx, cancel := context.WithCancel(context.Background())
+    a.log.Info("Service starting", "port", a.cfg.HTTPPort)
+ctx, cancel := context.WithCancel(context.Background())
     defer cancel()
-    errCh := make(chan error, 3)
+    go func() { a.bot.Start() }()
+    go a.consumer.Start(ctx) //  Start consumer in background
 
-    // Start Services
+
     go func() {
         if err := a.httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-            errCh <- fmt.Errorf("http server: %w", err)
-        }
-    }()
-    go func() { a.bot.Start() }()
-    go func() {
-        if err := a.consumer.Start(ctx); err != nil {
-            errCh <- fmt.Errorf("consumer: %w", err)
+            a.log.Error("server failed", "err", err)
         }
     }()
 
-    // Wait for shutdown
     quit := make(chan os.Signal, 1)
     signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-
-    select {
-    case sig := <-quit:
-        a.log.Info("shutdown signal", "sig", sig)
-    case err := <-errCh:
-        a.log.Error("fatal error", "err", err)
-        return err
-    }
+    <-quit
 
     return a.shutdown()
 }
 
 func (a *Application) shutdown() error {
-    a.log.Info("shutting down...")
-    ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
     defer cancel()
 
-    _ = a.httpSrv.Shutdown(ctx)
     a.bot.Stop()
-    a.consumer.Stop()
-    _ = a.amqpConn.Close()
+    a.httpSrv.Shutdown(ctx)
+    a.rdb.Close()
+    a.amqpConn.Close()
     return a.db.Close()
 }

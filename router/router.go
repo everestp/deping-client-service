@@ -9,50 +9,156 @@ import (
 	"github.com/everestp/deping-client-service/services"
 )
 
-// SetupRouter wires all HTTP routes with appropriate middleware.
-// Uses the standard library ServeMux (Go 1.22+ path parameters).
+// SetupRouter wires all HTTP routes using net/http ServeMux.
 func SetupRouter(
-	userCtrl     *controllers.UserController,
+	userCtrl *controllers.UserController,
+	monitorCtrl *controllers.MonitorController,
+
 	telegramCtrl *controllers.TelegramController,
-	userService  services.UserService,
+	userService services.UserService,
 ) http.Handler {
+
 	mux := http.NewServeMux()
 
 	auth := JWTMiddleware(userService)
 
-	// ── Health ────────────────────────────────────────────────────────────
+	// ─────────────────────────────────────────────────────────────────────
+	// Health
+	// ─────────────────────────────────────────────────────────────────────
+
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
+
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"status": "ok",
+		})
 	})
 
-	// ── Auth (public) ─────────────────────────────────────────────────────
-	mux.HandleFunc("POST /api/auth/register", userCtrl.Register)
-	mux.HandleFunc("POST /api/auth/login", userCtrl.Login)
-	mux.Handle("GET /api/auth/me", auth(http.HandlerFunc(userCtrl.Me)))
+	// ─────────────────────────────────────────────────────────────────────
+	// Auth Routes
+	// ─────────────────────────────────────────────────────────────────────
 
-	// ── Telegram account linking ──────────────────────────────────────────
-	mux.Handle("POST /api/telegram/link",
-		auth(http.HandlerFunc(telegramCtrl.InitiateLink)))
+	mux.HandleFunc("POST /api/v1/auth/register", userCtrl.Register)
+	mux.HandleFunc("POST /api/v1/auth/login", userCtrl.Login)
 
-	mux.Handle("GET /api/telegram/credits",
-		auth(http.HandlerFunc(telegramCtrl.GetCredits)))
+	mux.Handle(
+		"GET /api/v1/auth/me",
+		auth(http.HandlerFunc(userCtrl.Me)),
+	)
 
-	mux.Handle("POST /api/telegram/credits/add",
-		auth(http.HandlerFunc(telegramCtrl.AddCredits)))
+	// ─────────────────────────────────────────────────────────────────────
+	// Monitor Routes
+	// ─────────────────────────────────────────────────────────────────────
 
-	// ── Per-monitor notification toggle ───────────────────────────────────
-	mux.Handle("PUT /api/monitors/{monitor_id}/notifications",
-		auth(http.HandlerFunc(telegramCtrl.ToggleNotification)))
+	mux.Handle(
+		"POST /api/v1/monitors",
+		auth(http.HandlerFunc(monitorCtrl.Create)),
+	)
 
-	mux.Handle("GET /api/monitors/{monitor_id}/notifications",
-		auth(http.HandlerFunc(telegramCtrl.GetNotificationStatus)))
+	mux.Handle(
+		"GET /api/v1/monitors",
+		auth(http.HandlerFunc(monitorCtrl.List)),
+	)
 
-	// ── 404 fallback ──────────────────────────────────────────────────────
+	mux.Handle(
+		"GET /api/v1/monitors/{id}/stats",
+		auth(http.HandlerFunc(monitorCtrl.Stats)),
+	)
+
+	mux.Handle(
+		"PUT /api/v1/monitors/{id}/pause",
+		auth(http.HandlerFunc(monitorCtrl.Pause)),
+	)
+
+	mux.Handle(
+		"PUT /api/v1/monitors/{id}/resume",
+		auth(http.HandlerFunc(monitorCtrl.Resume)),
+	)
+
+	mux.Handle(
+		"DELETE /api/v1/monitors/{id}",
+		auth(http.HandlerFunc(monitorCtrl.Delete)),
+	)
+
+	// ─────────────────────────────────────────────────────────────────────
+	// Telegram Routes
+	// ─────────────────────────────────────────────────────────────────────
+
+	mux.Handle(
+		"POST /api/v1/telegram/link",
+		auth(http.HandlerFunc(telegramCtrl.InitiateLink)),
+	)
+
+	mux.Handle(
+		"GET /api/v1/telegram/credits",
+		auth(http.HandlerFunc(telegramCtrl.GetCredits)),
+	)
+
+	mux.Handle(
+		"POST /api/v1/telegram/credits/add",
+		auth(http.HandlerFunc(telegramCtrl.AddCredits)),
+	)
+
+	// monitor notification routes
+	mux.Handle(
+		"PUT /api/v1/monitors/{id}/notifications",
+		auth(http.HandlerFunc(telegramCtrl.ToggleNotification)),
+	)
+
+	mux.Handle(
+		"GET /api/v1/monitors/{id}/notifications",
+		auth(http.HandlerFunc(telegramCtrl.GetNotificationStatus)),
+	)
+
+	// ─────────────────────────────────────────────────────────────────────
+	// Runner Routes
+	// ─────────────────────────────────────────────────────────────────────
+
+	// mux.Handle(
+	// 	"POST /api/v1/runner/register",
+	// 	auth(http.HandlerFunc(runnerCtrl.Register)),
+	// )
+
+	// mux.Handle(
+	// 	"GET /api/v1/runner/me",
+	// 	auth(http.HandlerFunc(runnerCtrl.Me)),
+	// )
+
+	// mux.Handle(
+	// 	"POST /api/v1/runner/heartbeat",
+	// 	auth(http.HandlerFunc(runnerCtrl.Heartbeat)),
+	// )
+
+	// ─────────────────────────────────────────────────────────────────────
+	// Ping Result Submission
+	// ─────────────────────────────────────────────────────────────────────
+
+	// mux.Handle(
+	// 	"POST /api/v1/results",
+	// 	auth(http.HandlerFunc(pingCtrl.SubmitResults)),
+	// )
+
+	// ─────────────────────────────────────────────────────────────────────
+	// Reward Routes
+	// ─────────────────────────────────────────────────────────────────────
+
+	// mux.Handle(
+	// 	"GET /api/v1/rewards/status",
+	// 	auth(http.HandlerFunc(rewardCtrl.Status)),
+	// )
+
+	// ─────────────────────────────────────────────────────────────────────
+	// 404 Fallback
+	// ─────────────────────────────────────────────────────────────────────
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
-		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "route not found"})
+
+		_ = json.NewEncoder(w).Encode(dto.ErrorResponse{
+			Error: "route not found",
+		})
 	})
 
 	return mux
