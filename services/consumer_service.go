@@ -7,25 +7,14 @@ import (
 	"log/slog"
 	"time"
 
-	amqp "github.com/rabbitmq/amqp091-go"
-
 	"github.com/everestp/deping-client-service/dto"
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ConsumerService Interface
-// ═══════════════════════════════════════════════════════════════════════════
-
 type ConsumerService interface {
-	// Start begins consuming from RabbitMQ. Blocks until ctx is cancelled.
 	Start(ctx context.Context) error
-	// Stop gracefully shuts down the consumer.
 	Stop()
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Implementation
-// ═══════════════════════════════════════════════════════════════════════════
 
 type consumerService struct {
 	conn         *amqp.Connection
@@ -35,129 +24,119 @@ type consumerService struct {
 	queueName    string
 }
 
-func NewConsumerService(
-	conn *amqp.Connection,
-	alertService AlertService,
-	log *slog.Logger,
-) (ConsumerService, error) {
+func NewConsumerService(conn *amqp.Connection, alertService AlertService, log *slog.Logger) (ConsumerService, error) {
 	ch, err := conn.Channel()
 	if err != nil {
 		return nil, fmt.Errorf("open channel: %w", err)
 	}
 
-	// Declare queue idempotently — ensures it exists before consuming
-	_, err = ch.QueueDeclare(
-		"processing_queue",
-		true,  // durable
-		false, // auto-delete
-		false, // exclusive
-		false, // no-wait
-		nil,
+	const (
+		queueName    = "telegram_queue"
+		exchangeName = "monitor_updates"
 	)
+
+	// 1. Ensure the Queue exists
+	_, err = ch.QueueDeclare(queueName, true, false, false, false, nil)
 	if err != nil {
 		return nil, fmt.Errorf("declare queue: %w", err)
 	}
 
-	// Process one message at a time per consumer to preserve ordering per monitor
+	// 2. Ensure the Exchange exists (idempotent)
+	err = ch.ExchangeDeclare(exchangeName, "fanout", true, false, false, false, nil)
+	if err != nil {
+		return nil, fmt.Errorf("declare exchange: %w", err)
+	}
+
+	// 3. FORCE BINDING: This guarantees the consumer receives messages
+	err = ch.QueueBind(queueName, "", exchangeName, false, nil)
+	if err != nil {
+		return nil, fmt.Errorf("bind queue: %w", err)
+	}
+
+	// 4. Set QoS
 	if err := ch.Qos(1, 0, false); err != nil {
 		return nil, fmt.Errorf("set qos: %w", err)
 	}
 
-	return &consumerService{
-		conn:         conn,
-		ch:           ch,
-		alertService: alertService,
-		log:          log,
-		queueName:    "processing_queue",
-	}, nil
+	return &consumerService{conn: conn, ch: ch, alertService: alertService, log: log, queueName: queueName}, nil
 }
 
 func (c *consumerService) Start(ctx context.Context) error {
-	msgs, err := c.ch.Consume(
-		c.queueName,
-		"uptime-alert-consumer", // consumer tag
-		false,                   // auto-ack: false — we ack manually after processing
-		false, false, false, nil,
-	)
+	msgs, err := c.ch.Consume(c.queueName, "telegram-alert-consumer", false, false, false, false, nil)
 	if err != nil {
 		return fmt.Errorf("start consume: %w", err)
 	}
 
-	c.log.Info("RabbitMQ consumer started", "queue", c.queueName)
+	c.log.Info("Telegram consumer ready and listening", "queue", c.queueName)
 
 	for {
 		select {
 		case <-ctx.Done():
-			c.log.Info("consumer shutting down")
 			return nil
-
 		case msg, ok := <-msgs:
-			if !ok {
-				c.log.Warn("RabbitMQ channel closed; reconnect needed")
-				return fmt.Errorf("channel closed")
-			}
+			if !ok { return fmt.Errorf("channel closed") }
 			c.handleDelivery(ctx, msg)
 		}
 	}
 }
-
 func (c *consumerService) Stop() {
 	if c.ch != nil {
 		_ = c.ch.Close()
 	}
 }
 
-// handleDelivery parses a SubmitResultsRequest and processes each PingResultItem.
 func (c *consumerService) handleDelivery(ctx context.Context, msg amqp.Delivery) {
-	var packet dto.SubmitResultsRequest
-	if err := json.Unmarshal(msg.Body, &packet); err != nil {
-		c.log.Error("failed to unmarshal message", "err", err, "body", string(msg.Body))
-		// Nack without requeue — bad message format won't improve on retry
-		_ = msg.Nack(false, false)
-		return
-	}
+    // 1. Log the arrival of a raw message
+    c.log.Debug("received message from RabbitMQ", "body_len", len(msg.Body))
 
-	if len(packet.Results) == 0 {
-		_ = msg.Ack(false)
-		return
-	}
+    var packet dto.SubmitResultsRequest
+    if err := json.Unmarshal(msg.Body, &packet); err != nil {
+        c.log.Error("failed to unmarshal message", "err", err, "raw_body", string(msg.Body))
+        _ = msg.Nack(false, false)
+        return
+    }
 
-	c.log.Debug("processing batch",
-		"runner", packet.RunnerPubkey,
-		"results", len(packet.Results),
-	)
+    // 2. Log how many items are inside this batch
+    c.log.Info("processing batch request", "results_count", len(packet.Results), "runner", packet.RunnerPubkey)
 
-	processCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
+    if len(packet.Results) == 0 {
+        c.log.Debug("empty batch received, acknowledging")
+        _ = msg.Ack(false)
+        return
+    }
 
-	var lastErr error
-	for i := range packet.Results {
-		result := packet.Results[i]
+    processCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+    defer cancel()
 
-		// Normalise: MonitorID may arrive via job_id split fallback
-		if result.MonitorID == "" {
-			result.MonitorID = extractMonitorIDFromJobID(result.JobID)
-		}
+    var lastErr error
+    for _, result := range packet.Results {
+        if result.MonitorID == "" {
+            result.MonitorID = extractMonitorIDFromJobID(result.JobID)
+        }
 
-		if err := c.alertService.ProcessPingResult(processCtx, result); err != nil {
-			c.log.Error("process ping result failed",
-				"monitor_id", result.MonitorID,
-				"err", err,
-			)
-			lastErr = err
-		}
-	}
+        // 3. Log before calling AlertService
+        c.log.Debug("processing ping result", "monitor_id", result.MonitorID)
 
-	if lastErr != nil {
-		// Requeue on transient errors (e.g. DB temporarily unavailable)
-		_ = msg.Nack(false, true)
-		return
-	}
+        if err := c.alertService.ProcessPingResult(processCtx, result); err != nil {
+            c.log.Error("alert service failed to process result",
+                "monitor_id", result.MonitorID,
+                "err", err,
+            )
+            lastErr = err
+        }
+    }
 
-	_ = msg.Ack(false)
+    if lastErr != nil {
+        c.log.Warn("batch processing completed with errors, requeueing message", "err", lastErr)
+        _ = msg.Nack(false, true)
+        return
+    }
+
+    // 4. Log successful completion
+    c.log.Info("successfully processed and acknowledged batch")
+    _ = msg.Ack(false)
 }
 
-// extractMonitorIDFromJobID parses "monitor_id:runner_pubkey:timestamp" → monitor_id
 func extractMonitorIDFromJobID(jobID string) string {
 	for i, ch := range jobID {
 		if ch == ':' {

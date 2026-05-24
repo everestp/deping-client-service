@@ -66,9 +66,15 @@ func (b *Bot) registerHandlers() {
 
 func (b *Bot) withAuth(next tele.HandlerFunc) tele.HandlerFunc {
 	return func(c tele.Context) error {
-		tu, err := b.telegramRepo.GetTelegramUserByChatID(context.Background(), c.Sender().ID)
-		if err != nil || tu == nil || !tu.IsVerified {
-			return c.Send("🚫 *Access Denied*\nPlease link your account first: [deping.xyz](https://deping.xyz/settings)", tele.ModeMarkdown)
+		// Use Background context for the DB check
+		ctx := context.Background()
+		tu, err := b.telegramRepo.GetTelegramUserByChatID(ctx, c.Sender().ID)
+		if err != nil {
+			b.log.Error("Auth DB Error", "err", err, "chatID", c.Sender().ID)
+			return c.Send("⚠️ System busy. Please try again.")
+		}
+		if tu == nil || !tu.IsVerified {
+			return c.Send("🚫 *Access Denied*\nPlease link your account at [deping.xyz/settings](https://deping.xyz/settings)", tele.ModeMarkdown)
 		}
 		return next(c)
 	}
@@ -77,16 +83,18 @@ func (b *Bot) withAuth(next tele.HandlerFunc) tele.HandlerFunc {
 // ── Handlers ─────────────────────────────────────────────────────────────
 
 func (b *Bot) handleStart(c tele.Context) error {
-	tu, _ := b.telegramRepo.GetTelegramUserByUsername(context.Background(), c.Sender().Username)
+	ctx := context.Background()
+	tu, _ := b.telegramRepo.GetTelegramUserByUsername(ctx, c.Sender().Username)
 	if tu == nil {
 		return c.Send("👋 *Welcome to DePIN Monitor*\n\nPlease link your Telegram via [deping.xyz](https://deping.xyz/settings) to begin.", tele.ModeMarkdown)
 	}
 
-	_ = b.telegramRepo.UpdateChatID(context.Background(), tu.UserID, c.Sender().ID)
+	_ = b.telegramRepo.UpdateChatID(ctx, tu.UserID, c.Sender().ID)
+
 	if tu.IsVerified {
-		return c.Send("✅ *Account Linked!*\nUse /help to explore available commands.", tele.ModeMarkdown)
+		return c.Send("✅ *Account Linked!*\nUse /help to see commands.", tele.ModeMarkdown)
 	}
-	return c.Send("⚠️ *Pending Verification*\nPlease verify using: `/verify <code>`", tele.ModeMarkdown)
+	return c.Send("⚠️ *Pending Verification*\nVerify using: `/verify <code>`", tele.ModeMarkdown)
 }
 
 func (b *Bot) handleHelp(c tele.Context) error {
@@ -103,7 +111,7 @@ func (b *Bot) handleVerify(c tele.Context) error {
 	}
 	_, err := b.telegramService.VerifyLink(context.Background(), strings.TrimSpace(args[0]), c.Sender().ID, c.Sender().Username)
 	if err != nil {
-		return c.Send("❌ *Verification failed.* Please check your code and try again.", tele.ModeMarkdown)
+		return c.Send("❌ *Verification failed.* Please check your code.", tele.ModeMarkdown)
 	}
 	return c.Send("✨ *Account successfully linked!*", tele.ModeMarkdown)
 }
@@ -111,7 +119,7 @@ func (b *Bot) handleVerify(c tele.Context) error {
 func (b *Bot) handleMonitor(c tele.Context) error {
 	summaries, _ := b.telegramRepo.GetUserMonitorSummaries(context.Background(), c.Sender().ID)
 	if len(summaries) == 0 {
-		return c.Send("🔍 *No monitors registered.* Add them at [deping.xyz](https://deping.xyz).", tele.ModeMarkdown)
+		return c.Send("🔍 *No monitors found.* Add them at [deping.xyz](https://deping.xyz).", tele.ModeMarkdown)
 	}
 
 	menu := &tele.ReplyMarkup{}
@@ -129,11 +137,20 @@ func (b *Bot) handleShowMonitor(c tele.Context) error {
 	pings, _ := b.telegramRepo.GetRecentPings(context.Background(), monitorID, 5)
 
 	var sb strings.Builder
-	sb.WriteString("⏱ *Recent Pings (Last 5):*\n\n")
+	sb.WriteString("🛰 *Monitor Health*\n")
+	for i := len(pings) - 1; i >= 0; i-- {
+		if pings[i].Success { sb.WriteString("🟢") } else { sb.WriteString("🔴") }
+	}
+	sb.WriteString("\n\n`STAT | REG | LATE | TIME`\n`-------------------------`\n")
+
 	for _, p := range pings {
-		status := "✅"
-		if !p.Success { status = "❌" }
-		sb.WriteString(fmt.Sprintf("%s `[%s]` | %dms\n", status, p.Timestamp.Format("15:04"), p.LatencyMs))
+		status, lat := "OK  ", fmt.Sprintf("%dms", p.LatencyMs)
+		if !p.Success {
+			status, lat = "DOWN", fmt.Sprintf("E:%d", p.StatusCode)
+		}
+		reg := "N/A"
+		if len(p.GeoRegion) > 0 { reg = p.GeoRegion[:4] }
+		sb.WriteString(fmt.Sprintf("`%s | %-3s | %-4s | %s`\n", status, reg, lat, p.Timestamp.Format("15:04")))
 	}
 
 	menu := &tele.ReplyMarkup{}
@@ -143,45 +160,29 @@ func (b *Bot) handleShowMonitor(c tele.Context) error {
 
 func (b *Bot) handleToggleNotify(c tele.Context) error {
 	ctx := context.Background()
-	monitorID := c.Callback().Data
 	tu, _ := b.telegramRepo.GetTelegramUserByChatID(ctx, c.Sender().ID)
-	current, _ := b.telegramService.GetNotificationStatus(ctx, tu.UserID, monitorID)
+	current, _ := b.telegramService.GetNotificationStatus(ctx, tu.UserID, c.Callback().Data)
 
-	err := b.telegramService.ToggleNotification(ctx, tu.UserID, monitorID, !current)
+	err := b.telegramService.ToggleNotification(ctx, tu.UserID, c.Callback().Data, !current)
 	if err != nil {
-		return c.Respond(&tele.CallbackResponse{Text: "❌ Failed to update settings"})
+		return c.Respond(&tele.CallbackResponse{Text: "❌ Update Failed"})
 	}
-
-	msg := "Notifications Disabled 🔕"
-	if !current { msg = "Notifications Enabled 🔔" }
-	return c.Respond(&tele.CallbackResponse{Text: msg})
+	text := "Notifications Disabled 🔕"
+	if !current { text = "Notifications Enabled 🔔" }
+	return c.Respond(&tele.CallbackResponse{Text: text})
 }
 
 func (b *Bot) handleCredits(c tele.Context) error {
-    ctx := context.Background()
-    tu, err := b.telegramRepo.GetTelegramUserByChatID(ctx, c.Sender().ID)
-    if err != nil {
-        return c.Send("❌ *Error fetching balance.*")
-    }
+	ctx := context.Background()
+	tu, _ := b.telegramRepo.GetTelegramUserByChatID(ctx, c.Sender().ID)
+	status, err := b.telegramService.GetCreditStatus(ctx, tu.UserID)
+	if err != nil {
+		return c.Send("⚠️ *Could not retrieve credit data.*")
+	}
 
-    status, err := b.telegramService.GetCreditStatus(ctx, tu.UserID)
-    if err != nil {
-        return c.Send("⚠️ *Could not retrieve credit data.*")
-    }
-
-    // Best practice: Show everything so the user isn't guessing
-    msg := fmt.Sprintf(
-        "💰 *Account Credit Summary*\n\n"+
-        "Total Available: `%d`\n"+
-        "Free Credits Used: `%d`\n"+
-        "Remaining Free: `%d`\n\n"+
-        "📅 *Next Reset:* `%s`",
-        status.TotalCreditsLeft,
-        status.FreeCreditsUsed,
-        status.FreeCreditsLeft,
-        status.FreeResetDate,
-    )
-    return c.Send(msg, tele.ModeMarkdown)
+	msg := fmt.Sprintf("💰 *Credit Summary*\n\nAvailable: `%d`\nFree Used: `%d`\nNext Reset: `%s`",
+		status.TotalCreditsLeft, status.FreeCreditsUsed, status.FreeResetDate)
+	return c.Send(msg, tele.ModeMarkdown)
 }
 
 func (b *Bot) handleStatus(c tele.Context) error {

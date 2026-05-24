@@ -43,9 +43,9 @@ func Load() (*Config, error) {
 		HTTPPort:            getEnvOr("HTTP_PORT", "8080"),
 		JWTSecret:           jwtSecret,
 		RabbitMQURL:         rabbitURL,
-		QueueName:           getEnvOr("RABBITMQ_QUEUE", "processing_queue"),
+		QueueName:           getEnvOr("RABBITMQ_QUEUE", "telegram_queue"),
 		TelegramBotToken:    botToken,
-		TelegramBotUsername: getEnvOr("TELEGRAM_BOT_USERNAME", "YourMonitorBot"),
+		TelegramBotUsername: getEnvOr("TELEGRAM_BOT_USERNAME", "depingnetworkbot"),
 	}
 
 	// Validate numeric-looking fields

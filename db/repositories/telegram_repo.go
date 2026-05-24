@@ -330,24 +330,31 @@ func (r *postgressTelegramRepo) GetHealthState(ctx context.Context, monitorID st
 }
 
 func (r *postgressTelegramRepo) UpsertHealthState(ctx context.Context, s *MonitorHealthState) error {
-	const q = `
-		INSERT INTO monitor_health_state
-			(monitor_id, is_down, consecutive_failures, alert_sent, last_alerted_at)
-		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (monitor_id) DO UPDATE
-			SET is_down              = EXCLUDED.is_down,
-			    consecutive_failures = EXCLUDED.consecutive_failures,
-			    alert_sent           = EXCLUDED.alert_sent,
-			    last_alerted_at      = EXCLUDED.last_alerted_at,
-			    updated_at           = NOW()`
-	var lastAleratedAt interface{}
-	if s.LastAlertedAt.Valid {
-		lastAleratedAt = s.LastAlertedAt.Time
-	}
-	_, err := r.db.ExecContext(ctx, q,
-		s.MonitorID, s.IsDown, s.ConsecutiveFailures, s.AlertSent, lastAleratedAt,
-	)
-	return err
+    const q = `
+        INSERT INTO monitor_health_state
+            (monitor_id, is_down, consecutive_failures, alert_sent, last_alerted_at)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (monitor_id) DO UPDATE
+            SET is_down              = EXCLUDED.is_down,
+                consecutive_failures = EXCLUDED.consecutive_failures,
+                alert_sent           = EXCLUDED.alert_sent,
+                last_alerted_at      = EXCLUDED.last_alerted_at,
+                updated_at           = NOW()`
+
+    // Explicitly handle Null values for the driver
+    var lastAlertedAt interface{} = nil
+    if s.LastAlertedAt.Valid {
+        lastAlertedAt = s.LastAlertedAt.Time
+    }
+
+    _, err := r.db.ExecContext(ctx, q,
+        s.MonitorID,
+        s.IsDown,
+        s.ConsecutiveFailures,
+        s.AlertSent,
+        lastAlertedAt, // Pass nil if invalid
+    )
+    return err
 }
 
 // ── Subscriptions ─────────────────────────────────────────────────────────
