@@ -7,11 +7,16 @@ import "database/sql"
 type Storage struct {
 	Users    UserRepository
 	Telegram TelegramRepository
+	Monitors MonitorRepository
+	PingLogs PingLogRepository
 }
 
 func NewStorage(db *sql.DB) *Storage {
 	return &Storage{
 		Users:    NewUserRepository(db),
 		Telegram: NewTelegramRepository(db),
+		Monitors :NewMonitorRepository(db),
+		PingLogs: NewPingLogRepository(db),
+
 	}
 }
