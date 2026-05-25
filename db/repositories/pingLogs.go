@@ -7,22 +7,23 @@ import (
 	"time"
 )
 type PingLog struct {
-	ID           int64
-	MonitorID    string
-	RunnerPubkey string
-	DnsUs        uint64
-	TcpUs        uint64
-	TlsUs        uint64
-	TtfbUs       uint64
-	TotalUs      uint64
-	LatencyMs    int
-	StatusCode   int
-	Success      bool
-	ErrorKind    string
-	GeoRegion    string
-	Latitude  float64
-    Longitude float64
-	Timestamp    time.Time
+    ID           int64
+    MonitorID    string
+    RunnerPubkey string
+    DnsUs        uint64
+    TcpUs        uint64
+    TlsUs        uint64
+    TtfbUs       uint64
+    TotalUs      uint64
+    LatencyMs    int
+    StatusCode   int
+    Success      bool
+    ErrorKind    string
+    GeoRegion    string
+    Latitude     float64
+    Longitude    float64
+    Timestamp    time.Time // Used for SQL Partitioning
+    TimestampMs  int64     // The Universal Heartbeat (UTC Unix Milliseconds)
 }
 
 
@@ -45,7 +46,7 @@ func (r *postgresPingLogRepo) FindByMonitor(ctx context.Context, monitorID strin
         SELECT id, monitor_id, runner_pubkey,
                dns_us, tcp_us, tls_us, ttfb_us, total_us,
                latency_ms, status_code, success, error_kind,
-               geo_region, timestamp, latitude, longitude
+               geo_region, timestamp, latitude, longitude, timestamp_ms
         FROM ping_logs
         WHERE monitor_id = $1
         ORDER BY timestamp DESC
@@ -64,7 +65,7 @@ func (r *postgresPingLogRepo) FindByMonitor(ctx context.Context, monitorID strin
             &l.ID, &l.MonitorID, &l.RunnerPubkey,
             &l.DnsUs, &l.TcpUs, &l.TlsUs, &l.TtfbUs, &l.TotalUs,
             &l.LatencyMs, &l.StatusCode, &l.Success, &l.ErrorKind,
-            &l.GeoRegion, &l.Timestamp, &l.Latitude, &l.Longitude,
+            &l.GeoRegion, &l.Timestamp, &l.Latitude, &l.Longitude,&l.TimestampMs,
         ); err != nil {
             return nil, err
         }
