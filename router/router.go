@@ -7,6 +7,7 @@ import (
 	"github.com/everestp/deping-client-service/controllers"
 	"github.com/everestp/deping-client-service/dto"
 	"github.com/everestp/deping-client-service/services"
+	"github.com/everestp/deping-client-service/ws"
 )
 
 // SetupRouter wires all HTTP routes using net/http ServeMux.
@@ -16,6 +17,7 @@ func SetupRouter(
 
 	telegramCtrl *controllers.TelegramController,
 	userService services.UserService,
+	hub *ws.Hub,
 ) http.Handler {
 
 	mux := http.NewServeMux()
@@ -33,6 +35,13 @@ func SetupRouter(
 		_ = json.NewEncoder(w).Encode(map[string]string{
 			"status": "ok",
 		})
+	})
+
+	// ── WebSockets ────────────────────────────────────────────────────────
+	// You will need to create a ServeWs function in your ws package
+	// that handles the connection upgrade and hub registration.
+	mux.HandleFunc("GET /ws", func(w http.ResponseWriter, r *http.Request) {
+		ws.ServeWs(hub, w, r)
 	})
 
 	// ─────────────────────────────────────────────────────────────────────

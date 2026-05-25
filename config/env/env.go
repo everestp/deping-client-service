@@ -14,6 +14,7 @@ type Config struct {
 	QueueName           string
 	TelegramBotToken    string
 	TelegramBotUsername string
+	RedisAddr           string
 }
 
 // Load reads all required environment variables and returns an error if missing.
@@ -32,6 +33,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	redisAddr, err := requireEnv("REDIS_ADDR")
+    if err != nil {
+        return nil, err
+    }
 
 	botToken, err := requireEnv("TELEGRAM_BOT_TOKEN")
 	if err != nil {
@@ -43,9 +48,11 @@ func Load() (*Config, error) {
 		HTTPPort:            getEnvOr("HTTP_PORT", "8080"),
 		JWTSecret:           jwtSecret,
 		RabbitMQURL:         rabbitURL,
+		RedisAddr:           redisAddr,
 		QueueName:           getEnvOr("RABBITMQ_QUEUE", "telegram_queue"),
 		TelegramBotToken:    botToken,
 		TelegramBotUsername: getEnvOr("TELEGRAM_BOT_USERNAME", "depingnetworkbot"),
+
 	}
 
 	// Validate numeric-looking fields
