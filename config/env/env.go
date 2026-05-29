@@ -17,8 +17,9 @@ type Config struct {
 	RedisAddr           string
 }
 
-// Load reads all required environment variables and returns an error if missing.
+// Load reads all required environment variables and validates them.
 func Load() (*Config, error) {
+
 	dbURL, err := requireEnv("DATABASE_URL")
 	if err != nil {
 		return nil, err
@@ -29,21 +30,26 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	if len(jwtSecret) < 16 {
+		return nil, fmt.Errorf("JWT_SECRET is too short (minimum 16 characters recommended)")
+	}
+
 	rabbitURL, err := requireEnv("RABBITMQ_URL")
 	if err != nil {
 		return nil, err
 	}
+
 	redisAddr, err := requireEnv("REDIS_ADDR")
-    if err != nil {
-        return nil, err
-    }
+	if err != nil {
+		return nil, err
+	}
 
 	botToken, err := requireEnv("TELEGRAM_BOT_TOKEN")
 	if err != nil {
 		return nil, err
 	}
 
-	c := &Config{
+	cfg := &Config{
 		DatabaseURL:         dbURL,
 		HTTPPort:            getEnvOr("HTTP_PORT", "8080"),
 		JWTSecret:           jwtSecret,
@@ -52,19 +58,27 @@ func Load() (*Config, error) {
 		QueueName:           getEnvOr("RABBITMQ_QUEUE", "telegram_queue"),
 		TelegramBotToken:    botToken,
 		TelegramBotUsername: getEnvOr("TELEGRAM_BOT_USERNAME", "depingnetworkbot"),
-
 	}
 
-	// Validate numeric-looking fields
-	port, err := strconv.Atoi(c.HTTPPort)
+	// Validate port
+	port, err := strconv.Atoi(cfg.HTTPPort)
 	if err != nil || port < 1 || port > 65535 {
-		return nil, fmt.Errorf("HTTP_PORT must be a valid port number (1-65535), got: %q", c.HTTPPort)
+		return nil, fmt.Errorf("HTTP_PORT must be valid (1-65535), got: %q", cfg.HTTPPort)
 	}
 
-	return c, nil
+	// Extra safety checks
+	if cfg.QueueName == "" {
+		return nil, fmt.Errorf("RABBITMQ_QUEUE cannot be empty")
+	}
+
+	if cfg.RedisAddr == "" {
+		return nil, fmt.Errorf("REDIS_ADDR cannot be empty")
+	}
+
+	return cfg, nil
 }
 
-// requireEnv returns an error instead of panicking.
+// requireEnv ensures env var exists
 func requireEnv(key string) (string, error) {
 	v := os.Getenv(key)
 	if v == "" {
@@ -73,6 +87,7 @@ func requireEnv(key string) (string, error) {
 	return v, nil
 }
 
+// fallback env reader
 func getEnvOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -80,6 +95,7 @@ func getEnvOr(key, fallback string) string {
 	return fallback
 }
 
+// helper
 func GetString(key, fallback string) string {
 	return getEnvOr(key, fallback)
 }

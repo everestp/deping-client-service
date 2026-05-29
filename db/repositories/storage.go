@@ -9,6 +9,7 @@ type Storage struct {
 	Telegram TelegramRepository
 	Monitors MonitorRepository
 	PingLogs PingLogRepository
+	NodeRuunerRepo NodeRunnerRepository
 }
 
 func NewStorage(db *sql.DB) *Storage {
@@ -17,6 +18,8 @@ func NewStorage(db *sql.DB) *Storage {
 		Telegram: NewTelegramRepository(db),
 		Monitors :NewMonitorRepository(db),
 		PingLogs: NewPingLogRepository(db),
+		NodeRuunerRepo: NewNodeRunnerRepository(db),
+
 
 	}
 }

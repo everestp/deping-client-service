@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"database/sql"
+	"errors"
 )
 
 // User domain model
@@ -12,13 +13,17 @@ type User struct {
 	PasswordHash string
 	WalletPubkey string
 }
-
+var (
+	ErrDuplicateEmail  = errors.New("duplicate email")
+	ErrDuplicateWallet = errors.New("duplicate wallet")
+)
 // UserRepository defines the persistence contract for users.
 type UserRepository interface {
 	CreateUser(ctx context.Context, email, passwordHash, walletPubkey string) (*User, error)
 	GetUserByEmail(ctx context.Context, email string) (*User, error)
 	GetUserByID(ctx context.Context, id int) (*User, error)
 }
+
 
 type postgresUserRepo struct {
 	db *sql.DB

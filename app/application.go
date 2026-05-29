@@ -68,12 +68,13 @@ func New(cfg *env.Config) (*Application, error) {
 
 	// 2. Setup Storage Layer
 	storage := repositories.NewStorage(db)
+	memRegistry := services.NewMemoryRegistry()
 
 	// 3. Initialize Domain Services
 	userSvc := services.NewUserService(storage.Users, cfg.JWTSecret)
 	teleSvc := services.NewTelegramService(storage.Telegram, cfg.TelegramBotUsername, log)
 	monitorSvc := services.NewMonitorService(storage, rdb, rabbitCh, cfg)
-
+runnerSvc := services.NewRunnerService(storage, rdb, rabbitCh, cfg, memRegistry)
 	// 4. Initialize Bot & Alerts
 	teleBot, err := bot.NewBot(cfg.TelegramBotToken, teleSvc, nil, storage.Telegram, log)
 	if err != nil {
@@ -96,8 +97,17 @@ func New(cfg *env.Config) (*Application, error) {
 	userCtrl := controllers.NewUserController(userSvc)
 	teleCtrl := controllers.NewTelegramController(teleSvc)
 	monitorCtrl := controllers.NewMonitorController(monitorSvc)
+	runnerCtrl :=controllers.NewRunnerController(runnerSvc)
 
-	httpRouter := router.SetupRouter(userCtrl, monitorCtrl, teleCtrl, userSvc, hub)
+httpRouter := router.SetupRouter(
+	cfg,
+	userCtrl,
+	monitorCtrl,
+	teleCtrl,
+	runnerCtrl,
+	userSvc,
+	hub,
+)
 
 	// 7. CORS Configuration
 	c := cors.New(cors.Options{

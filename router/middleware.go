@@ -7,47 +7,116 @@ import (
 	"strings"
 
 	"github.com/everestp/deping-client-service/dto"
-	"github.com/everestp/deping-client-service/pkg/contextutils"
-	"github.com/everestp/deping-client-service/services"
+	"github.com/golang-jwt/jwt/v5"
 )
 
-// JWTMiddleware validates the Authorization: Bearer <token> header.
-// On success, it injects the user_id into the request context.
-func JWTMiddleware(userService services.UserService) func(http.Handler) http.Handler {
+// =========================
+// Context Keys (safe typing)
+// =========================
+
+type contextKey string
+
+const (
+	ContextUserID    contextKey = "user_id"
+	ContextUserEmail contextKey = "user_email"
+)
+
+// =========================
+// Middleware
+// =========================
+
+func JWTMiddleware(secret string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			auth := r.Header.Get("Authorization")
 
-			// 1. Validate Header Format
-			if auth == "" || !strings.HasPrefix(auth, "Bearer ") {
-				respondUnauthorized(w, "missing or invalid authorization header")
+			authHeader := r.Header.Get("Authorization")
+			if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+				respondUnauthorized(w, "missing or malformed authorization header")
 				return
 			}
 
-			// 2. Extract and Validate Token
-			token := strings.TrimPrefix(auth, "Bearer ")
-			userID, err := userService.ValidateToken(token)
-			if err != nil || userID == 0 {
+			tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
+
+			token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (any, error) {
+				if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+					return nil, jwt.ErrSignatureInvalid
+				}
+				return []byte(secret), nil
+			})
+
+			if err != nil || !token.Valid {
 				respondUnauthorized(w, "invalid or expired token")
 				return
 			}
 
-			// 3. Inject UserID into request context
-			// We use the same key defined in pkg/contextutils to avoid collisions
-			ctx := context.WithValue(r.Context(), contextutils.UserIDKey, userID)
+			claims, ok := token.Claims.(jwt.MapClaims)
+			if !ok {
+				respondUnauthorized(w, "invalid token claims")
+				return
+			}
 
-			// 4. Pass the modified context forward
+			// =========================
+			// SAFE parsing (NO PANIC)
+			// =========================
+
+			subRaw, ok := claims["sub"]
+			if !ok {
+				respondUnauthorized(w, "missing subject")
+				return
+			}
+
+			var userID int
+			switch v := subRaw.(type) {
+			case float64:
+				userID = int(v)
+			case int:
+				userID = v
+			case int64:
+				userID = int(v)
+			default:
+				respondUnauthorized(w, "invalid subject type")
+				return
+			}
+
+			email, _ := claims["email"].(string)
+
+			// Inject into context
+			ctx := context.WithValue(r.Context(), ContextUserID, userID)
+			ctx = context.WithValue(ctx, ContextUserEmail, email)
+
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
 
-// respondUnauthorized is a helper to standardize error responses
+// =========================
+// Helpers
+// =========================
+
+func GetUserID(r *http.Request) int {
+	v, ok := r.Context().Value(ContextUserID).(int)
+	if !ok {
+		return 0
+	}
+	return v
+}
+
+func GetUserEmail(r *http.Request) string {
+	v, ok := r.Context().Value(ContextUserEmail).(string)
+	if !ok {
+		return ""
+	}
+	return v
+}
+
+// =========================
+// Error Response
+// =========================
+
 func respondUnauthorized(w http.ResponseWriter, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
 
-	// Assuming dto.ErrorResponse has an 'Error' field
 	_ = json.NewEncoder(w).Encode(dto.ErrorResponse{
 		Error: msg,
 	})
