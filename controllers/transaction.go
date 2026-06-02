@@ -6,7 +6,7 @@ import (
     "net/http"
 
     // 1. Rename external library to 'solgo' to avoid collision
-    solgo "github.com/gagliardetto/solana-go"
+
 
     // 2. Import your internal client package
     "github.com/everestp/deping-client-service/solana"
@@ -34,16 +34,9 @@ func (c *TransactionController) ValidateTransaction(w http.ResponseWriter, r *ht
         return
     }
 
-    sig, err := solgo.SignatureFromBase58(req.Signature)
-    if err != nil {
-        http.Error(w, `{"error":"invalid signature"}`, http.StatusBadRequest)
-        return
-    }
-
-    mint, _ := solgo.PublicKeyFromBase58("2V5HdggYQXW1Z9nhrVKjNdYqg5NsQnZhwMERYr8WK1pU")
 
     // Fetch transaction info without validating the amount
-    info, err := c.solanaClient.GetTransactionInfo(r.Context(), sig, mint)
+    info, err := c.solanaClient.GetTransferInfo(r.Context(), req.Signature)
     if err != nil {
         json.NewEncoder(w).Encode(map[string]interface{}{
             "success": false,

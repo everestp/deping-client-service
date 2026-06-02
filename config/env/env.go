@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"sync"
 )
 
 type Config struct {
@@ -15,11 +16,29 @@ type Config struct {
 	TelegramBotToken    string
 	TelegramBotUsername string
 	RedisAddr           string
-   SolanaRPCURL         string
+	SolanaRPCURL        string
+	DepingMintAddress   string
+	StakeTreasuryAddr   string
 }
 
-// Load reads all required environment variables and validates them.
+var (
+	cfg  *Config
+	once sync.Once
+	err  error
+)
+
+// Load initializes config ONLY ONCE (thread-safe singleton)
 func Load() (*Config, error) {
+	once.Do(func() {
+
+		cfg, err = loadConfig()
+	})
+
+	return cfg, err
+}
+
+// MUST call internally only once
+func loadConfig() (*Config, error) {
 
 	dbURL, err := requireEnv("DATABASE_URL")
 	if err != nil {
@@ -32,7 +51,7 @@ func Load() (*Config, error) {
 	}
 
 	if len(jwtSecret) < 16 {
-		return nil, fmt.Errorf("JWT_SECRET is too short (minimum 16 characters recommended)")
+		return nil, fmt.Errorf("JWT_SECRET too short (min 16 chars)")
 	}
 
 	rabbitURL, err := requireEnv("RABBITMQ_URL")
@@ -56,48 +75,43 @@ func Load() (*Config, error) {
 		JWTSecret:           jwtSecret,
 		RabbitMQURL:         rabbitURL,
 		RedisAddr:           redisAddr,
-		QueueName:           getEnvOr("RABBITMQ_QUEUE", "telegram_queue"),
+		QueueName:           getEnvOr("RABBITMQ_QUEUE", "rabbit_mq_queue"),
 		TelegramBotToken:    botToken,
 		TelegramBotUsername: getEnvOr("TELEGRAM_BOT_USERNAME", "depingnetworkbot"),
-		SolanaRPCURL:         getEnvOr("SOLANA_RPC_URL", "https://api.devnet.solana.com"),
+		SolanaRPCURL:        getEnvOr("SOLANA_RPC_URL", "https://api.devnet.solana.com"),
+		DepingMintAddress:   getEnvOr("DEPING_MINT_ADDRESS", "2V5HdggYQXW1Z9nhrVKjNdYqg5NsQnZhwMERYr8WK1pU"),
+		StakeTreasuryAddr:   getEnvOr("STAKE_TREASURY_WALLET", "3pnWN58LE6vofXJKqv93Uj5NvcE7qxN6jiXgskaNhgkF"),
 	}
 
-	// Validate port
+	// validate port
 	port, err := strconv.Atoi(cfg.HTTPPort)
 	if err != nil || port < 1 || port > 65535 {
-		return nil, fmt.Errorf("HTTP_PORT must be valid (1-65535), got: %q", cfg.HTTPPort)
-	}
-
-	// Extra safety checks
-	if cfg.QueueName == "" {
-		return nil, fmt.Errorf("RABBITMQ_QUEUE cannot be empty")
-	}
-
-	if cfg.RedisAddr == "" {
-		return nil, fmt.Errorf("REDIS_ADDR cannot be empty")
+		return nil, fmt.Errorf("invalid HTTP_PORT: %q", cfg.HTTPPort)
 	}
 
 	return cfg, nil
 }
 
-// requireEnv ensures env var exists
+// PUBLIC ACCESS (clean usage everywhere)
+func Get() *Config {
+	if cfg == nil {
+		panic("env not initialized: call env.Load() once at startup")
+	}
+	return cfg
+}
+
+// helpers
 func requireEnv(key string) (string, error) {
 	v := os.Getenv(key)
 	if v == "" {
-		return "", fmt.Errorf("required environment variable %q is not set", key)
+		return "", fmt.Errorf("missing env: %s", key)
 	}
 	return v, nil
 }
 
-// fallback env reader
 func getEnvOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
 	}
 	return fallback
-}
-
-// helper
-func GetString(key, fallback string) string {
-	return getEnvOr(key, fallback)
 }

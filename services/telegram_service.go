@@ -1,16 +1,18 @@
 package services
 
 import (
-    "context"
-    "crypto/rand"
-    "encoding/hex"
-    "fmt"
-    "log/slog"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"log/slog"
 
-    "github.com/everestp/deping-client-service/db/repositories"
-    "github.com/everestp/deping-client-service/dto"
+	"github.com/everestp/deping-client-service/config/env"
+	"github.com/everestp/deping-client-service/db/repositories"
+	"github.com/everestp/deping-client-service/dto"
+	"github.com/everestp/deping-client-service/solana"
 )
-
 type TelegramService interface {
     InitiateLink(ctx context.Context, userID int, username string) (*dto.LinkTelegramResponse, error)
     VerifyLink(ctx context.Context, code string, chatID int64, chatUsername string) (int, error)
@@ -22,13 +24,16 @@ type TelegramService interface {
 }
 
 type telegramService struct {
-    repo        repositories.TelegramRepository
-    botUsername string
-    log         *slog.Logger
-}
+    repo          repositories.TelegramRepository
+    tx_repo       repositories.TransactionRepository
+    solanaClient  *solana.Client // Explicitly type your client
+    botUsername   string
+    log           *slog.Logger
 
-func NewTelegramService(repo repositories.TelegramRepository, botUsername string, log *slog.Logger) TelegramService {
-    return &telegramService{repo: repo, botUsername: botUsername, log: log}
+
+}
+func NewTelegramService(repo repositories.TelegramRepository, botUsername string, log *slog.Logger , solanaClient *solana.Client) TelegramService {
+    return &telegramService{repo: repo, botUsername: botUsername, log: log,solanaClient:solanaClient }
 }
 
 func (s *telegramService) InitiateLink(ctx context.Context, userID int, username string) (*dto.LinkTelegramResponse, error) {
@@ -85,10 +90,60 @@ func (s *telegramService) GetCreditStatus(ctx context.Context, userID int) (*dto
     }, nil
 }
 
-func (s *telegramService) AddPurchasedCredits(ctx context.Context, userID int, amount int, txSig string) (int, error) {
-    return s.repo.AddPurchasedCredits(ctx, userID, amount, txSig)
-}
+func (s *telegramService) AddPurchasedCredits(
+	ctx context.Context,
+	userID int,
+	amount int,
+	txSig string,
+) (int, error) {
 
+	// 1. Prevent duplicate processing
+	processed, err := s.tx_repo.IsTxProcessed(ctx, txSig)
+	if err != nil {
+		return 0, err
+	}
+
+	if processed {
+		return 0, errors.New("transaction already processed")
+	}
+
+	// 2. Fetch blockchain data (MINT-AWARE)
+	txInfo, err := s.solanaClient.GetTransferInfo(ctx, txSig)
+	if err != nil {
+		return 0, fmt.Errorf("failed to verify transaction: %w", err)
+	}
+
+	// 3. Treasury wallet (must be receiver)
+	treasuryAddress := env.Get().StakeTreasuryAddr
+
+	if txInfo.Receiver != treasuryAddress {
+		return 0, errors.New("payment sent to wrong treasury address")
+	}
+
+	// 4. SAFE AMOUNT CHECK (NO FLOAT)
+	expected := uint64(amount)
+
+	if uint64(txInfo.Amount) != expected {
+		return 0, fmt.Errorf(
+			"amount mismatch expected=%d got=%d",
+			expected,
+			txInfo.Amount,
+		)
+	}
+
+	// 5. Commit transaction
+	err = s.tx_repo.ProcessPayment(
+		ctx,
+		userID,
+		uint64(amount),
+		txSig,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("failed to finalize transaction: %w", err)
+	}
+
+	return amount, nil
+}
 func (s *telegramService) ToggleNotification(ctx context.Context, userID int, monitorID string, enabled bool) error {
     return s.repo.UpsertSubscription(ctx, userID, monitorID, enabled)
 }

@@ -70,10 +70,11 @@ func New(cfg *env.Config) (*Application, error) {
 	// 2. Setup Storage Layer
 	storage := repositories.NewStorage(db)
 	memRegistry := services.NewMemoryRegistry()
+	solanaClient := solana.NewSolanaClient(cfg.SolanaRPCURL)
 
 	// 3. Initialize Domain Services
 	userSvc := services.NewUserService(storage.Users, cfg.JWTSecret)
-	teleSvc := services.NewTelegramService(storage.Telegram, cfg.TelegramBotUsername, log)
+	teleSvc := services.NewTelegramService(storage.Telegram, cfg.TelegramBotUsername, log, solanaClient)
 	monitorSvc := services.NewMonitorService(storage, rdb, rabbitCh, cfg)
 runnerSvc := services.NewRunnerService(storage, rdb, rabbitCh, cfg, memRegistry)
 	// 4. Initialize Bot & Alerts
@@ -89,7 +90,7 @@ runnerSvc := services.NewRunnerService(storage, rdb, rabbitCh, cfg, memRegistry)
 	if err != nil {
 		return nil, fmt.Errorf("consumer init: %w", err)
 	}
-solanaClient := solana.NewClient(cfg.SolanaRPCURL)
+
 	hub := ws.NewHub()
 	go hub.Run() // Start background broadcaster
 	ws.StartBridge(hub, rabbitCh)

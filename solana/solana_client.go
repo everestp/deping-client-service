@@ -2,88 +2,165 @@ package solana
 
 import (
 	"context"
-
 	"fmt"
 	"strconv"
 
-	"github.com/gagliardetto/solana-go"
+	"github.com/everestp/deping-client-service/config/env"
+	solgo "github.com/gagliardetto/solana-go"
 	"github.com/gagliardetto/solana-go/rpc"
+
 )
 
 type Client struct {
 	rpcClient *rpc.Client
 }
 
-func NewClient(rpcURL string) *Client {
+func NewSolanaClient(rpcURL string) *Client {
 	return &Client{rpcClient: rpc.New(rpcURL)}
 }
 
-// GetTransactionStatus returns status using a safe 2-argument RPC call
-func (c *Client) GetTransactionStatus(ctx context.Context, sig solana.Signature) (string, error) {
+// =========================
+// TX STATUS
+// =========================
+
+func (c *Client) GetTransactionStatus(ctx context.Context, sig solgo.Signature) (string, error) {
+
 	out, err := c.rpcClient.GetSignatureStatuses(
-    ctx,
-    true,
-    sig,
-)
+		ctx,
+		true,
+		sig,
+	)
 	if err != nil {
 		return "", err
 	}
-	if out == nil || out.Value == nil || len(out.Value) == 0 || out.Value[0] == nil {
+
+	if out == nil || len(out.Value) == 0 || out.Value[0] == nil {
 		return "not_found", nil
 	}
 
 	status := out.Value[0]
+
 	switch status.ConfirmationStatus {
-	case rpc.ConfirmationStatusFinalized: return "finalized", nil
-	case rpc.ConfirmationStatusConfirmed: return "confirmed", nil
-	case rpc.ConfirmationStatusProcessed: return "processed", nil
-	default: return "pending", nil
+	case rpc.ConfirmationStatusFinalized:
+		return "finalized", nil
+	case rpc.ConfirmationStatusConfirmed:
+		return "confirmed", nil
+	case rpc.ConfirmationStatusProcessed:
+		return "processed", nil
+	default:
+		return "pending", nil
 	}
 }
 
+// =========================
+// TX INFO (SPL TOKEN)
+// =========================
 
-
-
-
-type TransferInfo struct {
-    Amount    uint64
-    Receiver  string
-    Timestamp int64
-    Mint      string
+type TxInfo struct {
+	Mint      string
+	Amount    uint64
+	Timestamp int64
+	Sender    string
+	Receiver  string
 }
 
-func (c *Client) GetTransactionInfo(ctx context.Context, sig solana.Signature, mint solana.PublicKey) (*TransferInfo, error) {
-    out, err := c.rpcClient.GetTransaction(ctx, sig, &rpc.GetTransactionOpts{
-        Encoding: solana.EncodingJSONParsed,
-		Commitment: rpc.CommitmentConfirmed,
-    })
-if err != nil {
-        // Log the actual error to see if it's a network issue or missing index
-        fmt.Printf("RPC Error for %s: %v\n", sig.String(), err)
-        return nil, fmt.Errorf("transaction not found")
-    }
-	if out == nil || out.Meta == nil {
-        return nil, fmt.Errorf("transaction data empty")
-    }
+func (c *Client) GetTransferInfo(
+	ctx context.Context,
+	sig string,
+) (*TxInfo, error) {
 
-    var ts int64
-    if out.BlockTime != nil {
-        ts = int64(*out.BlockTime)
-    }
+	tx, err := c.rpcClient.GetTransaction(
+		ctx,
+		solgo.MustSignatureFromBase58(sig),
+		&rpc.GetTransactionOpts{
+			Encoding: solgo.EncodingBase64,
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
 
-    // Capture the first relevant token balance for the specified mint
-    for _, balance := range out.Meta.PostTokenBalances {
-        if balance.Mint.Equals(mint) {
-            amount, _ := strconv.ParseUint(balance.UiTokenAmount.Amount, 10, 64)
-            return &TransferInfo{
-                Amount:    amount,
-                Receiver:  balance.Owner.String(),
-                Timestamp: ts,
-            }, nil
-        }
-    }
-    return nil, fmt.Errorf("no token balance info found for this mint")
+	if tx.Meta == nil || tx.Transaction == nil {
+		return nil, fmt.Errorf("transaction data missing")
+	}
+
+	// parse tx (not strictly needed for SPL diff logic)
+	_, err = tx.Transaction.GetTransaction()
+	if err != nil {
+		return nil, err
+	}
+
+	mint := solgo.MustPublicKeyFromBase58(env.Get().DepingMintAddress)
+
+	var (
+		sender    string
+		receiver  string
+		amount    uint64
+		blockTime int64
+	)
+
+	if tx.BlockTime != nil {
+		blockTime = int64(*tx.BlockTime)
+	}
+
+	// =========================
+	// SPL TOKEN BALANCE DIFF
+	// =========================
+	for _, pre := range tx.Meta.PreTokenBalances {
+
+if pre.Mint != mint {
+			continue
+		}
+
+
+			post := findPost(tx.Meta.PostTokenBalances, pre.AccountIndex)
+
+		preAmt := parse(pre.UiTokenAmount.Amount)
+		postAmt := parse(post.UiTokenAmount.Amount)
+
+
+		diff := postAmt - preAmt
+
+		if diff < 0 {
+			sender = pre.Owner.String()
+			amount = uint64(-diff)
+		}
+
+		if diff > 0 {
+			receiver = pre.Owner.String()
+		}
+	}
+
+	return &TxInfo{
+		Mint:      mint.String(),
+		Amount:    amount,
+		Timestamp: blockTime,
+		Sender:    sender,
+		Receiver:  receiver,
+	}, nil
 }
 
+// =========================
+// HELPERS
+// =========================
 
 
+
+func findPost(list []rpc.TokenBalance, index uint16) rpc.TokenBalance {
+	for _, p := range list {
+		if p.AccountIndex == index {
+			return p
+		}
+	}
+
+	return rpc.TokenBalance{
+		UiTokenAmount: &rpc.UiTokenAmount{
+			Amount: "0",
+		},
+	}
+}
+
+func parse(s string) int64 {
+	v, _ := strconv.ParseInt(s, 10, 64)
+	return v
+}
