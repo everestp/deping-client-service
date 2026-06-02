@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/everestp/deping-client-service/dto"
@@ -33,7 +34,13 @@ func (c *RunnerController) Register(w http.ResponseWriter, r *http.Request) {
 
 	// ownerID := contextutils.GetUserID(r.Context())
 	ownerEmail := contextutils.GetUserEmail(r.Context()) // ✅ FIXED
+fmt.Printf("DEBUG: Decoded request: %+v\n", req)
+fmt.Printf("DEBUG: Registering node for email: '%s'\n", ownerEmail)
 
+    if ownerEmail == "" {
+        respondError(w, http.StatusUnauthorized, "user email not found in context")
+        return
+    }
 	resp, err := c.svc.Register(r.Context(), ownerEmail, &req)
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
@@ -51,32 +58,56 @@ type MeRequest struct {
 }
 
 func (c *RunnerController) Me(w http.ResponseWriter, r *http.Request) {
-	var req MeRequest
+    var req MeRequest
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        respondError(w, http.StatusBadRequest, "invalid request body")
+        return
+    }
 
-	if req.Pubkey == "" {
-		respondError(w, http.StatusBadRequest, "pubkey is required")
-		return
-	}
+    if req.Pubkey == "" {
+        respondError(w, http.StatusBadRequest, "pubkey is required")
+        return
+    }
 
-	email := contextutils.GetUserEmail(r.Context())
+    email := contextutils.GetUserEmail(r.Context())
 
-resp, err := c.svc.GetByEmailAndPubkey(r.Context(), email, req.Pubkey)
-if err != nil {
-	if errors.Is(err, sql.ErrNoRows) {
-		respondError(w, http.StatusNotFound, "runner node not found")
-		return
-	}
+    // 1. Fetch the node state
+     fmt.Println("Tjis is the  email and pub key ",req.Pubkey  ,email)
+    node, err := c.svc.GetByEmailAndPubkey(r.Context(), req.Pubkey, email)
+    fmt.Println("Tjis is the nod edos ",node)
+    if err != nil {
+        if errors.Is(err, sql.ErrNoRows) {
+            // Nothing record present -> register
+            respondJSON(w, http.StatusOK, map[string]string{"view": "register"})
+            return
+        }
+        respondError(w, http.StatusInternalServerError, "internal server error")
+        return
+    }
 
-	respondError(w, http.StatusInternalServerError, "internal server error")
-	return
-}
+    // 2. Determine View based on database state
+    var nextView string
 
-	respondJSON(w, http.StatusOK, resp)
+    switch {
+    // A. Record present, node_pda is null -> activate
+    case node.NodePda == "":
+        nextView = "activate"
+
+    // B. Record present, node_pda NOT null, is_validator is false -> stake
+    case !node.IsValidator:
+        nextView = "stake"
+
+    // C. Record present, node_pda NOT null, is_validator is true -> dashboard
+    default:
+        nextView = "dashboard"
+    }
+
+    // 3. Return combined state
+    respondJSON(w, http.StatusOK, map[string]interface{}{
+        "view": nextView,
+        "node": node,
+    })
 }
 // =========================
 // HEARTBEAT

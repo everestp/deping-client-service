@@ -15,6 +15,7 @@ type Config struct {
 	TelegramBotToken    string
 	TelegramBotUsername string
 	RedisAddr           string
+   SolanaRPCURL         string
 }
 
 // Load reads all required environment variables and validates them.
@@ -58,6 +59,7 @@ func Load() (*Config, error) {
 		QueueName:           getEnvOr("RABBITMQ_QUEUE", "telegram_queue"),
 		TelegramBotToken:    botToken,
 		TelegramBotUsername: getEnvOr("TELEGRAM_BOT_USERNAME", "depingnetworkbot"),
+		SolanaRPCURL:         getEnvOr("SOLANA_RPC_URL", "https://api.devnet.solana.com"),
 	}
 
 	// Validate port

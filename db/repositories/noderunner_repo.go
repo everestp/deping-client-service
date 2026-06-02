@@ -3,24 +3,30 @@ package repositories
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
 
 type RunnerNode struct {
-	ID                        int       `json:"id"`
-	OwnerEmail                string    `json:"owner_email"`
-	OwnerPubkey               string    `json:"owner_pubkey"`
-	NodePubkey                string    `json:"node_pubkey"`
-	Region                    string    `json:"region"`
-	Latitude                  float64   `json:"latitude"`
-	Longitude                 float64   `json:"longitude"`
-	OffchainAccumulatedTokens float64   `json:"offchain_accumulated_tokens"`
-	TotalEarnedTokensAllTime  float64   `json:"total_earned_tokens_all_time"`
-	PendingSolanaSync         bool      `json:"pending_solana_sync"`
-	LastSeenTimestamp         time.Time `json:"last_seen_timestamp"`
-	CreatedAt                 time.Time `json:"created_at"`
-	UpdatedAt                 time.Time `json:"updated_at"`
+    ID                           int          `json:"id"`
+    OwnerEmail                   string          `json:"owner_email"`
+    OwnerPubkey                  string          `json:"owner_pubkey"`
+    NodePubkey                   string          `json:"node_pubkey"`
+    Region                       string          `json:"region"`
+    Latitude                     float64         `json:"latitude"`
+    Longitude                    float64         `json:"longitude"`
+    OffchainAccumulatedTokens    float64         `json:"offchain_accumulated_tokens"`
+    TotalEarnedTokensAllTime     float64         `json:"total_earned_tokens_all_time"`
+    PendingSolanaSync            bool            `json:"pending_solana_sync"`
+    LastSeenTimestamp            time.Time       `json:"last_seen_timestamp"`
+    CreatedAt                    time.Time       `json:"created_at"`
+    UpdatedAt                    time.Time       `json:"updated_at"`
+    DeletedAt                    *time.Time      `json:"deleted_at"`
+    IsValidator                  bool            `json:"is_validator"`
+    StakedAmount                 string          `json:"staked_amount"`
+    UnstakeRequestAt             *time.Time      `json:"unstake_request_at"`
+    NodePda                      sql.NullString  `json:"node_pda"` // Correct for NULL support
 }
 
 type AccumulateResult struct {
@@ -52,79 +58,81 @@ func NewNodeRunnerRepository(db *sql.DB) NodeRunnerRepository {
 // =========================================
 
 func (r *nodeRunnerRepo) Register(
-	ctx context.Context,
-	ownerEmail,
-	ownerPubkey,
-	nodePubkey,
-	region string,
-	lat,
-	lng float64,
+    ctx context.Context,
+    ownerEmail,
+    ownerPubkey,
+    nodePubkey,
+    region string,
+    lat,
+    lng float64,
 ) (*RunnerNode, error) {
 
-	const q = `
-		INSERT INTO runner_nodes (
-			owner_email,
-			owner_pubkey,
-			node_pubkey,
-			region,
-			latitude,
-			longitude
-		)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		ON CONFLICT (owner_pubkey)
-		DO UPDATE SET
-			last_seen_timestamp = NOW(),
-			region = EXCLUDED.region,
-			latitude = EXCLUDED.latitude,
-			longitude = EXCLUDED.longitude
-		RETURNING
-			id,
-			owner_email,
-			owner_pubkey,
-			node_pubkey,
-			region,
-			latitude,
-			longitude,
-			offchain_accumulated_tokens,
-			total_earned_tokens_all_time,
-			pending_solana_sync,
-			last_seen_timestamp,
-			created_at,
-			updated_at
-	`
+    const q = `
+        INSERT INTO runner_nodes (
+            owner_email,
+            owner_pubkey,
+            node_pubkey,
+            region,
+            latitude,
+            longitude
+        )
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (node_pubkey)
+        DO UPDATE SET
+            owner_pubkey = EXCLUDED.owner_pubkey,
+            region = EXCLUDED.region,
+            latitude = EXCLUDED.latitude,
+            longitude = EXCLUDED.longitude,
+            last_seen_timestamp = NOW(),
+            updated_at = NOW()
+        RETURNING
+            id,
+            owner_email,
+            owner_pubkey,
+            node_pubkey,
+            region,
+            latitude,
+            longitude,
+            offchain_accumulated_tokens,
+            total_earned_tokens_all_time,
+            pending_solana_sync,
+            last_seen_timestamp,
+            created_at,
+            updated_at
+    `
 
-	n := &RunnerNode{}
+    n := &RunnerNode{}
 
-	err := r.db.QueryRowContext(
-		ctx,
-		q,
-		ownerEmail,
-		ownerPubkey,
-		nodePubkey,
-		region,
-		lat,
-		lng,
-	).Scan(
-		&n.ID,
-		&n.OwnerEmail,
-		&n.OwnerPubkey,
-		&n.NodePubkey,
-		&n.Region,
-		&n.Latitude,
-		&n.Longitude,
-		&n.OffchainAccumulatedTokens,
-		&n.TotalEarnedTokensAllTime,
-		&n.PendingSolanaSync,
-		&n.LastSeenTimestamp,
-		&n.CreatedAt,
-		&n.UpdatedAt,
-	)
+    err := r.db.QueryRowContext(
+        ctx,
+        q,
+        ownerEmail,
+        ownerPubkey,
+        nodePubkey,
+        region,
+        lat,
+        lng,
+    ).Scan(
+        &n.ID,
+        &n.OwnerEmail,
+        &n.OwnerPubkey,
+        &n.NodePubkey,
+        &n.Region,
+        &n.Latitude,
+        &n.Longitude,
+        &n.OffchainAccumulatedTokens,
+        &n.TotalEarnedTokensAllTime,
+        &n.PendingSolanaSync,
+        &n.LastSeenTimestamp,
+        &n.CreatedAt,
+        &n.UpdatedAt,
+    )
 
-	if err != nil {
-		return nil, fmt.Errorf("nodeRunnerRepo.Register: %w", err)
-	}
+    if err != nil {
+        return nil, fmt.Errorf("nodeRunnerRepo.Register: %w", err)
+    }
 
-	return n, nil
+    return n, nil
 }
 
 // =========================================
@@ -186,57 +194,68 @@ func (r *nodeRunnerRepo) FindByPubkey(
 // =========================================
 
 func (r *nodeRunnerRepo) FindByEmailAndPubkey(
-	ctx context.Context,
-	email string,
-	pubkey string,
+    ctx context.Context,
+    email string,
+    pubkey string,
 ) (*RunnerNode, error) {
 
-	const q = `
-		SELECT
-			id,
-			owner_email,
-			owner_pubkey,
-			node_pubkey,
-			region,
-			latitude,
-			longitude,
-			offchain_accumulated_tokens,
-			total_earned_tokens_all_time,
-			pending_solana_sync,
-			last_seen_timestamp,
-			created_at,
-			updated_at
-		FROM runner_nodes
-		WHERE owner_email = $1
-		  AND owner_pubkey = $2
-		  AND deleted_at IS NULL
-		ORDER BY created_at DESC
-		LIMIT 1
-	`
+    const q = `
+        SELECT
+            id,
+            owner_email,
+            owner_pubkey,
+            node_pubkey,
+            region,
+            latitude,
+            longitude,
+            offchain_accumulated_tokens,
+            total_earned_tokens_all_time,
+            pending_solana_sync,
+            last_seen_timestamp,
+            created_at,
+            updated_at,
+            deleted_at,
+            is_validator,
+            staked_amount,
+            unstake_request_at,
+            node_pda
+        FROM runner_nodes
+        WHERE owner_email = $1
+          AND owner_pubkey = $2
+          AND deleted_at IS NULL
+        ORDER BY created_at DESC
+        LIMIT 1
+    `
 
-	var n RunnerNode
+    var n RunnerNode
 
-	err := r.db.QueryRowContext(ctx, q, email, pubkey).Scan(
-		&n.ID,
-		&n.OwnerEmail,
-		&n.OwnerPubkey,
-		&n.NodePubkey,
-		&n.Region,
-		&n.Latitude,
-		&n.Longitude,
-		&n.OffchainAccumulatedTokens,
-		&n.TotalEarnedTokensAllTime,
-		&n.PendingSolanaSync,
-		&n.LastSeenTimestamp,
-		&n.CreatedAt,
-		&n.UpdatedAt,
-	)
-
-	if err != nil {
-		return nil, fmt.Errorf("nodeRunnerRepo.FindByEmailAndPubkey: %w", err)
-	}
-
-	return &n, nil
+    err := r.db.QueryRowContext(ctx, q, email, pubkey).Scan(
+        &n.ID,
+        &n.OwnerEmail,
+        &n.OwnerPubkey,
+        &n.NodePubkey,
+        &n.Region,
+        &n.Latitude,
+        &n.Longitude,
+        &n.OffchainAccumulatedTokens,
+        &n.TotalEarnedTokensAllTime,
+        &n.PendingSolanaSync,
+        &n.LastSeenTimestamp,
+        &n.CreatedAt,
+        &n.UpdatedAt,
+        &n.DeletedAt,
+        &n.IsValidator,
+        &n.StakedAmount,
+        &n.UnstakeRequestAt,
+        &n.NodePda,
+    )
+if err != nil {
+        if errors.Is(err, sql.ErrNoRows) {
+            return nil, sql.ErrNoRows // Return raw error for controller to detect
+        }
+        return nil, fmt.Errorf("db error: %w", err)
+    }
+    return &n, nil
 }
 
 // =========================================

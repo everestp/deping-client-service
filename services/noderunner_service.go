@@ -54,7 +54,7 @@ func (s *runnerService) Register(ctx context.Context, email string, req *dto.Reg
 	lat, _ := strconv.ParseFloat(req.Latitude, 64)
 	lng, _ := strconv.ParseFloat(req.Longitude, 64)
 
-	node, err := s.store.NodeRuunerRepo.Register(ctx, email, req.OwnerPubkey, req.Region,req.NodePubkey ,lat, lng)
+	node, err := s.store.NodeRuunerRepo.Register(ctx, email, req.OwnerPubkey, req.NodePubkey,req.Region ,lat, lng)
 	if err != nil {
 		return nil, fmt.Errorf("register runner: %w", err)
 	}
@@ -68,12 +68,15 @@ func (s *runnerService) GetByPubkey(ctx context.Context, pubkey string) (*dto.Ru
 	}
 	return toRunnerResponse(node), nil
 }
-func (s *runnerService) GetByEmailAndPubkey(ctx context.Context, pubkey , email string) (*dto.RunnerResponse, error) {
-	node, err := s.store.NodeRuunerRepo.FindByEmailAndPubkey(ctx, email ,pubkey)
-	if err != nil {
-		return nil, fmt.Errorf("runner not found: %w", err)
-	}
-	return toRunnerResponse(node), nil
+func (s *runnerService) GetByEmailAndPubkey(ctx context.Context, pubkey, email string) (*dto.RunnerResponse, error) {
+    node, err := s.store.NodeRuunerRepo.FindByEmailAndPubkey(ctx, email, pubkey)
+    if err != nil {
+        // Return the error directly so the controller can check errors.Is(err, sql.ErrNoRows)
+        return nil, err
+    }
+
+    // Return the mapped DTO
+    return toRunnerResponse(node), nil
 }
 func (s *runnerService) Heartbeat(ctx context.Context, pubkey string) error {
 	// 1. Persist the database-backed timestamp update
@@ -98,6 +101,7 @@ func toRunnerResponse(n *repositories.RunnerNode) *dto.RunnerResponse {
 	return &dto.RunnerResponse{
 		ID:                        n.ID,
 		OwnerPubkey:               n.OwnerPubkey,
+		OwnerEmail:     n.OwnerEmail,
 		Region:                    n.Region,
 		NodePubkey:                n.NodePubkey,
 
@@ -106,5 +110,7 @@ func toRunnerResponse(n *repositories.RunnerNode) *dto.RunnerResponse {
 		OffchainAccumulatedTokens: n.OffchainAccumulatedTokens,
 		TotalEarnedTokensAllTime:  n.TotalEarnedTokensAllTime,
 		PendingSolanaSync:         n.PendingSolanaSync,
+		NodePda:   n.NodePda.String,
+		IsValidator: n.IsValidator,
 	}
 }

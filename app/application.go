@@ -17,6 +17,7 @@ import (
 	"github.com/everestp/deping-client-service/db/repositories"
 	"github.com/everestp/deping-client-service/router"
 	"github.com/everestp/deping-client-service/services"
+	"github.com/everestp/deping-client-service/solana"
 	"github.com/everestp/deping-client-service/ws"
 	_ "github.com/lib/pq"
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -88,7 +89,7 @@ runnerSvc := services.NewRunnerService(storage, rdb, rabbitCh, cfg, memRegistry)
 	if err != nil {
 		return nil, fmt.Errorf("consumer init: %w", err)
 	}
-
+solanaClient := solana.NewClient(cfg.SolanaRPCURL)
 	hub := ws.NewHub()
 	go hub.Run() // Start background broadcaster
 	ws.StartBridge(hub, rabbitCh)
@@ -98,6 +99,7 @@ runnerSvc := services.NewRunnerService(storage, rdb, rabbitCh, cfg, memRegistry)
 	teleCtrl := controllers.NewTelegramController(teleSvc)
 	monitorCtrl := controllers.NewMonitorController(monitorSvc)
 	runnerCtrl :=controllers.NewRunnerController(runnerSvc)
+	txCtrl := controllers.NewTransactionController(solanaClient)
 
 httpRouter := router.SetupRouter(
 	cfg,
@@ -105,6 +107,7 @@ httpRouter := router.SetupRouter(
 	monitorCtrl,
 	teleCtrl,
 	runnerCtrl,
+	txCtrl,
 	userSvc,
 	hub,
 )

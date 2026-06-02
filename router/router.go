@@ -18,7 +18,8 @@ func SetupRouter(
 	userCtrl *controllers.UserController,
 	monitorCtrl *controllers.MonitorController,
 	telegramCtrl *controllers.TelegramController,
-	runnerCtrl *controllers.RunnerController, 
+	runnerCtrl *controllers.RunnerController,
+	txCtrl *controllers.TransactionController,
 
 	userService services.UserService,
 	hub *ws.Hub,
@@ -87,8 +88,15 @@ func SetupRouter(
 	// ─────────────────────────────────────────────────────────────────────
 
 	mux.Handle("POST /api/v1/runner/register", auth(http.HandlerFunc(runnerCtrl.Register)))
-	mux.Handle("GET /api/v1/runner/me", auth(http.HandlerFunc(runnerCtrl.Me)))
+	mux.Handle("POST /api/v1/runner/me", auth(http.HandlerFunc(runnerCtrl.Me)))
 	mux.Handle("POST /api/v1/runner/heartbeat", auth(http.HandlerFunc(runnerCtrl.Heartbeat)))
+
+		// ─────────────────────────────────────────────────────────────────────
+	// Transaction Validaton Routes
+	// ─────────────────────────────────────────────────────────────────────
+
+	mux.Handle("POST /api/v1/validate/transaction", auth(http.HandlerFunc(txCtrl.ValidateTransaction)))
+
 
 	// ─────────────────────────────────────────────────────────────────────
 	// 404 fallback
