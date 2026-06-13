@@ -20,36 +20,22 @@ func NewTransactionRepository(db *sql.DB) TransactionRepository {
 	return &postgresTxRepo{db: db}
 }
 
-// ProcessPayment uses a SQL transaction to prevent double-spending
+// ProcessPayment marks a transaction as processed to prevent replay attacks.
 func (r *postgresTxRepo) ProcessPayment(ctx context.Context, userID int, amount uint64, txSig string) error {
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	// Defer rollback in case of error
-	defer tx.Rollback()
+    // We no longer need BeginTx/Commit because we are executing a single atomic INSERT.
+    // The PRIMARY KEY (signature) will throw an error if the record already exists.
+    query := `
+        INSERT INTO processed_transactions (signature, user_id, amount, timestamp_ms) 
+        VALUES ($1, $2, $3, EXTRACT(EPOCH FROM NOW()) * 1000)`
+    
+    _, err := r.db.ExecContext(ctx, query, txSig, userID, amount)
+    if err != nil {
+        // This will trigger if the txSig is already in the database
+        return fmt.Errorf("transaction already processed or database error: %w", err)
+    }
 
-	// 1. Mark transaction as processed
-	// If txSig exists, this will return an error due to the UNIQUE constraint
-	_, err = tx.ExecContext(ctx,
-		"INSERT INTO processed_transactions (signature, user_id, amount) VALUES ($1, $2, $3)",
-		txSig, userID, amount)
-	if err != nil {
-		return fmt.Errorf("transaction already processed or database error: %w", err)
-	}
-
-	// 2. Update user credits
-	_, err = tx.ExecContext(ctx,
-		"UPDATE users SET credits = credits + $1 WHERE id = $2",
-		amount, userID)
-	if err != nil {
-		return err
-	}
-
-	// 3. Commit
-	return tx.Commit()
+    return nil
 }
-
 func (r *postgresTxRepo) IsTxProcessed(ctx context.Context, txSig string) (bool, error) {
 	var exists bool
 	query := "SELECT EXISTS(SELECT 1 FROM processed_transactions WHERE signature = $1)"

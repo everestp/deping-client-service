@@ -30,3 +30,18 @@ type RunnerResponse struct {
     NodePda          string  `json:"node_pda"` // Use string to easily check if empty in JSON
     UnstakeRequestAt *string `json:"unstake_request_at"`
 }
+
+
+
+
+type StakeRequest struct {
+    Signature string `json:"signature"`
+    Amount    uint64 `json:"expected_amount"` // Raw integer amount (lamports)
+    NodePda  string  `json:"node_pda"`
+    Pubkey    string `json:"public_key"`
+}
+
+type TransactionStatusResponse struct {
+    Status  string `json:"status"`
+    Message string `json:"message"`
+}

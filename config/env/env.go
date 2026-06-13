@@ -19,6 +19,10 @@ type Config struct {
 	SolanaRPCURL        string
 	DepingMintAddress   string
 	StakeTreasuryAddr   string
+	TreasuryAddr   string
+	StakeTreasuryOwnerAddr   string
+	TreasuryOwnerAddr   string
+	ProgramID string 
 }
 
 var (
@@ -63,6 +67,10 @@ func loadConfig() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	progID, err := requireEnv("PROGRAM_ID")
+    if err != nil {
+        return nil, err
+    }
 
 	botToken, err := requireEnv("TELEGRAM_BOT_TOKEN")
 	if err != nil {
@@ -79,8 +87,13 @@ func loadConfig() (*Config, error) {
 		TelegramBotToken:    botToken,
 		TelegramBotUsername: getEnvOr("TELEGRAM_BOT_USERNAME", "depingnetworkbot"),
 		SolanaRPCURL:        getEnvOr("SOLANA_RPC_URL", "https://api.devnet.solana.com"),
-		DepingMintAddress:   getEnvOr("DEPING_MINT_ADDRESS", "2V5HdggYQXW1Z9nhrVKjNdYqg5NsQnZhwMERYr8WK1pU"),
+		DepingMintAddress:   getEnvOr("DEPING_MINT_ADDRESS", "DPg3P2U4syj8eGL6rRqMqhUfDayxVunh7Fmcowwh6hsj"),
 		StakeTreasuryAddr:   getEnvOr("STAKE_TREASURY_WALLET", "3pnWN58LE6vofXJKqv93Uj5NvcE7qxN6jiXgskaNhgkF"),
+		TreasuryAddr:   getEnvOr("TREASURY_WALLET", "2pp688Vidur6vTC8HQ2TQWvT6rnX1GcozgUtZxtPfwSv"),
+		StakeTreasuryOwnerAddr:   getEnvOr("STAKE_VAULT_OWNER", "BSH3fp3RbLHr398i6jD6bQuNGgdcZxzvYNDWsNdWfcM1"),
+		TreasuryOwnerAddr:   getEnvOr("TRESURTY_WALLET_OWNER", "7gZQw1XhPA2B63d14Mu5bUnJieAYkTLEsmjMNrQzmmbf"),
+		ProgramID: progID,
+		
 	}
 
 	// validate port

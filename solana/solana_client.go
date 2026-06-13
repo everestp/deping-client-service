@@ -2,21 +2,30 @@ package solana
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"strconv"
 
 	"github.com/everestp/deping-client-service/config/env"
 	solgo "github.com/gagliardetto/solana-go"
 	"github.com/gagliardetto/solana-go/rpc"
-
 )
 
 type Client struct {
-	rpcClient *rpc.Client
+	RPC       *rpc.Client
+	ProgramID solgo.PublicKey
 }
 
-func NewSolanaClient(rpcURL string) *Client {
-	return &Client{rpcClient: rpc.New(rpcURL)}
+func NewSolanaClient(rpcURL string, programID string) (*Client, error) {
+	progID, err := solgo.PublicKeyFromBase58(programID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid program ID: %w", err)
+	}
+
+	return &Client{
+		RPC:       rpc.New(rpcURL),
+		ProgramID: progID,
+	}, nil
 }
 
 // =========================
@@ -24,12 +33,7 @@ func NewSolanaClient(rpcURL string) *Client {
 // =========================
 
 func (c *Client) GetTransactionStatus(ctx context.Context, sig solgo.Signature) (string, error) {
-
-	out, err := c.rpcClient.GetSignatureStatuses(
-		ctx,
-		true,
-		sig,
-	)
+	out, err := c.RPC.GetSignatureStatuses(ctx, true, sig)
 	if err != nil {
 		return "", err
 	}
@@ -64,12 +68,9 @@ type TxInfo struct {
 	Receiver  string
 }
 
-func (c *Client) GetTransferInfo(
-	ctx context.Context,
-	sig string,
-) (*TxInfo, error) {
-
-	tx, err := c.rpcClient.GetTransaction(
+func (c *Client) GetTransferInfo(ctx context.Context, sig string) (*TxInfo, error) {
+	// 1. Fetch transaction metadata from RPC
+	tx, err := c.RPC.GetTransaction(
 		ctx,
 		solgo.MustSignatureFromBase58(sig),
 		&rpc.GetTransactionOpts{
@@ -77,17 +78,16 @@ func (c *Client) GetTransferInfo(
 		},
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("rpc GetTransaction call failed for sig %s: %w", sig, err)
 	}
 
 	if tx.Meta == nil || tx.Transaction == nil {
-		return nil, fmt.Errorf("transaction data missing")
+		return nil, fmt.Errorf("transaction or meta field missing from RPC details")
 	}
 
-	// parse tx (not strictly needed for SPL diff logic)
 	_, err = tx.Transaction.GetTransaction()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed parsing layout transaction structure: %w", err)
 	}
 
 	mint := solgo.MustPublicKeyFromBase58(env.Get().DepingMintAddress)
@@ -103,32 +103,52 @@ func (c *Client) GetTransferInfo(
 		blockTime = int64(*tx.BlockTime)
 	}
 
-	// =========================
-	// SPL TOKEN BALANCE DIFF
-	// =========================
-	for _, pre := range tx.Meta.PreTokenBalances {
+	foundSender := false
+	foundReceiver := false
 
-if pre.Mint != mint {
+	// =========================================================
+	// OPTIMIZED SPL TOKEN BALANCE DIFF LOOKUP MATRIX
+	// =========================================================
+	for _, pre := range tx.Meta.PreTokenBalances {
+		if pre.Mint != mint {
 			continue
 		}
 
+		// Use the boolean flag 'found' from our updated pointer helper
+		post, found := findPost(tx.Meta.PostTokenBalances, pre.AccountIndex)
 
-			post := findPost(tx.Meta.PostTokenBalances, pre.AccountIndex)
+		var postAmt int64
+		if !found {
+			postAmt = 0
+		} else {
+			postAmt = parse(post.UiTokenAmount.Amount)
+		}
 
 		preAmt := parse(pre.UiTokenAmount.Amount)
-		postAmt := parse(post.UiTokenAmount.Amount)
-
-
 		diff := postAmt - preAmt
 
+		// Balance decreased -> This is the SENDER
 		if diff < 0 {
 			sender = pre.Owner.String()
 			amount = uint64(-diff)
+			foundSender = true
 		}
 
+		// Balance increased -> This is the RECEIVER
 		if diff > 0 {
 			receiver = pre.Owner.String()
+			foundReceiver = true
 		}
+	}
+
+	// 2. Added debugging assertions to fail quickly if token parsing is weird
+	if !foundSender || !foundReceiver {
+		return nil, fmt.Errorf("on-chain validation mismatch: parsed sender_found=%t (%s), receiver_found=%t (%s). Verify DepingMintAddress matches transaction layout",
+			foundSender, sender, foundReceiver, receiver)
+	}
+
+	if amount == 0 {
+		return nil, fmt.Errorf("transaction parsing finalized with an invalid payload transfer value of 0 tokens")
 	}
 
 	return &TxInfo{
@@ -144,23 +164,29 @@ if pre.Mint != mint {
 // HELPERS
 // =========================
 
-
-
-func findPost(list []rpc.TokenBalance, index uint16) rpc.TokenBalance {
+// FIXED: Returns a pointer along with a boolean flag representing successful indexing match
+func findPost(list []rpc.TokenBalance, index uint16) (*rpc.TokenBalance, bool) {
 	for _, p := range list {
 		if p.AccountIndex == index {
-			return p
+			return &p, true
 		}
 	}
-
-	return rpc.TokenBalance{
-		UiTokenAmount: &rpc.UiTokenAmount{
-			Amount: "0",
-		},
-	}
+	return nil, false
 }
 
 func parse(s string) int64 {
 	v, _ := strconv.ParseInt(s, 10, 64)
 	return v
+}
+
+func (c *Client) DeriveNodePDA(ownerPubKey solgo.PublicKey, email string) (solgo.PublicKey, uint8, error) {
+	emailHash := sha256.Sum256([]byte(email))
+
+	seeds := [][]byte{
+		[]byte("node"),
+		ownerPubKey.Bytes(),
+		emailHash[:],
+	}
+
+	return solgo.FindProgramAddress(seeds, c.ProgramID)
 }

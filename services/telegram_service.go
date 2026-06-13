@@ -114,7 +114,7 @@ func (s *telegramService) AddPurchasedCredits(
 	}
 
 	// 3. Treasury wallet (must be receiver)
-	treasuryAddress := env.Get().StakeTreasuryAddr
+	treasuryAddress := env.Get().TreasuryOwnerAddr
 
 	if txInfo.Receiver != treasuryAddress {
 		return 0, errors.New("payment sent to wrong treasury address")

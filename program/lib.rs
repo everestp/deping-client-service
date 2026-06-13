@@ -203,38 +203,108 @@ pub mod deping {
         Ok(())
     }
 
-    pub fn request_unstake(ctx: Context<RequestUnstake>) -> Result<()> {
+  // Use this to add more stake at any time (Top-Up)
+    pub fn add_stake(ctx: Context<StakeTokens>, amount: u64) -> Result<()> {
         let node = &mut ctx.accounts.node_account;
-        require!(node.is_validator, ErrorCode::Unauthorized);
-        node.unstake_request_at = Clock::get()?.unix_timestamp;
-        node.is_validator = false;
-        Ok(())
-    }
-
-    pub fn withdraw_stake(ctx: Context<WithdrawStake>) -> Result<()> {
-        let node = &mut ctx.accounts.node_account;
-        let elapsed = Clock::get()?.unix_timestamp.checked_sub(node.unstake_request_at).ok_or(ErrorCode::Overflow)?;
-        require!(elapsed >= UNSTAKE_COOLDOWN_SECONDS, ErrorCode::UnstakeCooldownActive);
-
-        let amount = node.staked_amount;
-        node.staked_amount = 0;
-        node.unstake_request_at = 0;
-
-        let (_authority, bump) = Pubkey::find_program_address(&[b"staking_vault"], ctx.program_id);
-        let bump_seed = [bump];
-        let seeds: &[&[u8]] = &[b"staking_vault", &bump_seed];
-        let signer = &[seeds];
+        
+        node.staked_amount = node.staked_amount.checked_add(amount).ok_or(ErrorCode::Overflow)?;
+        
+        if node.staked_amount >= MINIMUM_VALIDATOR_STAKE {
+            node.is_validator = true;
+        }
 
         token::transfer(
-            CpiContext::new_with_signer(ctx.accounts.token_program.to_account_info(), Transfer {
-                from: ctx.accounts.staking_vault.to_account_info(),
-                to: ctx.accounts.user_token_account.to_account_info(),
-                authority: ctx.accounts.staking_vault_authority.to_account_info(),
-            }, signer),
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.user_token_account.to_account_info(),
+                    to: ctx.accounts.staking_vault.to_account_info(),
+                    authority: ctx.accounts.owner.to_account_info(),
+                },
+            ),
             amount,
         )?;
         Ok(())
     }
+
+    // Atomic: Withdraws exact amount, checks minimums, updates status
+    pub fn withdraw_stake(ctx: Context<WithdrawStake>, amount: u64) -> Result<()> {
+        let node = &mut ctx.accounts.node_account;
+        require!(node.staked_amount >= amount, ErrorCode::InsufficientFunds);
+        
+        let remaining = node.staked_amount.checked_sub(amount).ok_or(ErrorCode::Overflow)?;
+
+        if remaining > 0 {
+            require!(remaining >= MINIMUM_VALIDATOR_STAKE, ErrorCode::InsufficientStake);
+        } else {
+            node.is_validator = false;
+        }
+
+        node.staked_amount = remaining;
+
+        let (_authority, bump) = Pubkey::find_program_address(&[b"staking_vault"], ctx.program_id);
+        let seeds: &[&[u8]] = &[b"staking_vault", &[bump]];
+        let signer = &[seeds];
+
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.staking_vault.to_account_info(),
+                    to: ctx.accounts.user_token_account.to_account_info(),
+                    authority: ctx.accounts.staking_vault_authority.to_account_info(),
+                },
+                signer,
+            ),
+            amount,
+        )?;
+        Ok(())
+    }
+
+    // Atomic: Cleans up vault, wipes PDA, transfers SOL rent back to user
+    pub fn delete_account(ctx: Context<DeleteAccount>, amount: u64) -> Result<()> {
+        let node = &mut ctx.accounts.node_account;
+        require!(node.staked_amount == amount, ErrorCode::InsufficientFunds);
+
+        if amount > 0 {
+            let (_authority, bump) = Pubkey::find_program_address(&[b"staking_vault"], ctx.program_id);
+            let seeds: &[&[u8]] = &[b"staking_vault", &[bump]];
+            let signer = &[seeds];
+
+            token::transfer(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    Transfer {
+                        from: ctx.accounts.staking_vault.to_account_info(),
+                        to: ctx.accounts.user_token_account.to_account_info(),
+                        authority: ctx.accounts.staking_vault_authority.to_account_info(),
+                    },
+                    signer,
+                ),
+                amount,
+            )?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct DeleteAccount<'info> {
+    #[account(
+        mut, 
+        has_one = owner,
+        constraint = node_account.reward_balance == 0,
+        close = owner // <--- Automatically wipes PDA data and transfers rent to user
+    )]
+    pub node_account: Account<'info, NodeAccount>,
+    #[account(mut)]
+    pub staking_vault: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub user_token_account: Account<'info, TokenAccount>,
+    pub staking_vault_authority: AccountInfo<'info>,
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    pub token_program: Program<'info, Token>,
 }
 
 #[account]

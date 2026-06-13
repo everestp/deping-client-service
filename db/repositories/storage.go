@@ -10,7 +10,7 @@ type Storage struct {
 	Monitors MonitorRepository
 	PingLogs PingLogRepository
 	NodeRuunerRepo NodeRunnerRepository
-	txRepo TransactionRepository
+	TxRepo TransactionRepository
 }
 
 func NewStorage(db *sql.DB) *Storage {
@@ -20,7 +20,7 @@ func NewStorage(db *sql.DB) *Storage {
 		Monitors :NewMonitorRepository(db),
 		PingLogs: NewPingLogRepository(db),
 		NodeRuunerRepo: NewNodeRunnerRepository(db),
-		txRepo: NewTransactionRepository(db),
+		TxRepo: NewTransactionRepository(db),
 
 
 	}

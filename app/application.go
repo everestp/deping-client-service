@@ -70,13 +70,16 @@ func New(cfg *env.Config) (*Application, error) {
 	// 2. Setup Storage Layer
 	storage := repositories.NewStorage(db)
 	memRegistry := services.NewMemoryRegistry()
-	solanaClient := solana.NewSolanaClient(cfg.SolanaRPCURL)
+	solanaClient, err := solana.NewSolanaClient(cfg.SolanaRPCURL, cfg.ProgramID)
+if err != nil {
+  log.Error("solana client error: %v", err)
+}
 
 	// 3. Initialize Domain Services
 	userSvc := services.NewUserService(storage.Users, cfg.JWTSecret)
 	teleSvc := services.NewTelegramService(storage.Telegram, cfg.TelegramBotUsername, log, solanaClient)
 	monitorSvc := services.NewMonitorService(storage, rdb, rabbitCh, cfg)
-runnerSvc := services.NewRunnerService(storage, rdb, rabbitCh, cfg, memRegistry)
+runnerSvc := services.NewRunnerService(storage, rdb, rabbitCh, cfg, memRegistry,solanaClient,log)
 	// 4. Initialize Bot & Alerts
 	teleBot, err := bot.NewBot(cfg.TelegramBotToken, teleSvc, nil, storage.Telegram, log)
 	if err != nil {
@@ -99,7 +102,7 @@ runnerSvc := services.NewRunnerService(storage, rdb, rabbitCh, cfg, memRegistry)
 	userCtrl := controllers.NewUserController(userSvc)
 	teleCtrl := controllers.NewTelegramController(teleSvc)
 	monitorCtrl := controllers.NewMonitorController(monitorSvc)
-	runnerCtrl :=controllers.NewRunnerController(runnerSvc)
+	runnerCtrl :=controllers.NewRunnerController(runnerSvc ,solanaClient)
 	txCtrl := controllers.NewTransactionController(solanaClient)
 
 httpRouter := router.SetupRouter(
@@ -119,6 +122,7 @@ httpRouter := router.SetupRouter(
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Authorization", "Content-Type"},
 		AllowCredentials: true,
+		MaxAge: 40000,
 	})
 
 	httpSrv := &http.Server{

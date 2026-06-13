@@ -41,6 +41,11 @@ type NodeRunnerRepository interface {
 	UpdateHeartbeat(ctx context.Context, pubkey string) error
 	AccumulateReward(ctx context.Context, pubkey string, delta, threshold float64) (*AccumulateResult, error)
 	SetPendingSync(ctx context.Context, pubkey string, pending bool) error
+    UpdateStake(ctx context.Context, pubkey string, amountRaw int64) error
+    UpdateUnstake(ctx context.Context, pubkey string, amountRaw int64) error
+    DeleteNode(ctx context.Context, pubkey string) error
+    GetNodeByPDA(ctx context.Context, pda string) (*RunnerNode, error)
+    UpdateNodePDA(ctx context.Context, email string, pubkey string, pda string) error 
 }
 
 type nodeRunnerRepo struct {
@@ -51,6 +56,85 @@ func NewNodeRunnerRepository(db *sql.DB) NodeRunnerRepository {
 	return &nodeRunnerRepo{
 		db: db,
 	}
+}
+func (r *nodeRunnerRepo) UpdateNodePDA(ctx context.Context, email string, pubkey string, pda string) error {
+    // 1. Update only if the pubkey matches AND the node belongs to the authenticated email
+    query := `
+        UPDATE runner_nodes 
+        SET node_pda = $1 
+        WHERE node_pubkey = $2 
+        AND owner_email = $3 
+        AND deleted_at IS NULL`
+
+    result, err := r.db.ExecContext(ctx, query, pda, pubkey, email)
+    if err != nil {
+        return fmt.Errorf("database execution error: %w", err)
+    }
+
+    // 2. Check if the record actually existed
+    rowsAffected, err := result.RowsAffected()
+    if err != nil {
+        return fmt.Errorf("failed to retrieve rows affected: %w", err)
+    }
+
+    if rowsAffected == 0 {
+        return fmt.Errorf("no node found matching the provided pubkey and email")
+    }
+
+    return nil
+}
+func (r *nodeRunnerRepo) GetNodeByPDA(ctx context.Context, pda string) (*RunnerNode, error) {
+    query := `
+        SELECT id, owner_email, owner_pubkey, node_pubkey, region, latitude, longitude, 
+               offchain_accumulated_tokens, total_earned_tokens_all_time, staked_amount, is_validator
+        FROM runner_nodes 
+        WHERE node_pda = $1 AND deleted_at IS NULL`
+
+    var node RunnerNode
+    err := r.db.QueryRowContext(ctx, query, pda).Scan(
+        &node.ID, &node.OwnerEmail, &node.OwnerPubkey, &node.NodePubkey, 
+        &node.Region, &node.Latitude, &node.Longitude,
+        &node.OffchainAccumulatedTokens, &node.TotalEarnedTokensAllTime,
+        &node.StakedAmount, &node.IsValidator,
+    )
+
+    if err != nil {
+        if err == sql.ErrNoRows {
+            return nil, fmt.Errorf("node not found for PDA: %s", pda)
+        }
+        return nil, err
+    }
+    return &node, nil
+}
+// UpdateStake increments the stake balance on-chain
+func (r *nodeRunnerRepo) UpdateStake(ctx context.Context, pubkey string, amountRaw int64) error {
+    query := `
+        UPDATE runner_nodes 
+        SET staked_amount = staked_amount + $1,
+            is_validator = CASE WHEN (staked_amount + $1) >= 20000000000 THEN TRUE ELSE FALSE END
+        WHERE owner_pubkey = $2 AND deleted_at IS NULL`
+    
+    _, err := r.db.ExecContext(ctx, query, amountRaw, pubkey)
+    return err
+}
+
+// UpdateUnstake decrements the stake balance after a successful withdraw
+func (r *nodeRunnerRepo) UpdateUnstake(ctx context.Context, pubkey string, amountRaw int64) error {
+    query := `
+        UPDATE runner_nodes 
+        SET staked_amount = staked_amount - $1,
+            is_validator = CASE WHEN (staked_amount - $1) >= 20000000000 THEN TRUE ELSE FALSE END
+        WHERE node_pubkey = $2 AND deleted_at IS NULL`
+    
+    _, err := r.db.ExecContext(ctx, query, amountRaw, pubkey)
+    return err
+}
+
+// DeleteNode soft-deletes the record when the node is fully closed
+func (r *nodeRunnerRepo) DeleteNode(ctx context.Context, pubkey string) error {
+    query := `UPDATE runner_nodes SET deleted_at = NOW() WHERE node_pubkey = $1`
+    _, err := r.db.ExecContext(ctx, query, pubkey)
+    return err
 }
 
 // =========================================

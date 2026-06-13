@@ -7,17 +7,23 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/everestp/deping-client-service/config/env"
 	"github.com/everestp/deping-client-service/dto"
 	"github.com/everestp/deping-client-service/pkg/contextutils"
 	"github.com/everestp/deping-client-service/services"
+	"github.com/everestp/deping-client-service/solana"
 )
 
 type RunnerController struct {
-	svc services.NodeRunnerService
+	svc          services.NodeRunnerService
+	solanaClient *solana.Client // Added to perform on-chain verification
 }
 
-func NewRunnerController(svc services.NodeRunnerService) *RunnerController {
-	return &RunnerController{svc: svc}
+func NewRunnerController(svc services.NodeRunnerService, solClient *solana.Client) *RunnerController {
+	return &RunnerController{
+		svc:          svc,
+		solanaClient: solClient,
+	}
 }
 
 // =========================
@@ -128,4 +134,99 @@ func (c *RunnerController) Heartbeat(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, dto.MessageResponse{
 		Message: "heartbeat recorded",
 	})
+}
+
+
+func (c *RunnerController) ValidateStake(w http.ResponseWriter, r *http.Request) {
+	var req dto.StakeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+
+	// 1. Verify On-Chain
+	txInfo, err := c.solanaClient.GetTransferInfo(r.Context(), req.Signature)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "on-chain verification failed")
+		return
+	}
+
+    fmt.Printf("This is the Revcoiver===========+++>",txInfo.Receiver)
+     fmt.Printf("This is the Ampint===========+++>",txInfo.Amount)
+      fmt.Printf("This is the Sender===========+++>",txInfo.Sender)
+
+	// 2. Validate Vault and Amount
+	if txInfo.Receiver != env.Get().StakeTreasuryOwnerAddr {
+		respondError(w, http.StatusForbidden, "invalid destination vault")
+		return
+	}
+
+	// 3. Service Orchestration
+	email := contextutils.GetUserEmail(r.Context())
+	err = c.svc.ValidateAndStake(r.Context(), email, req.Pubkey, req.Signature, txInfo.Amount)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{"status": "success"})
+}
+
+func (c *RunnerController) ValidateUnstake(w http.ResponseWriter, r *http.Request) {
+	var req dto.StakeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+
+	// 1. Verify On-Chain
+	txInfo, err := c.solanaClient.GetTransferInfo(r.Context(), req.Signature)
+	if err != nil {
+        fmt.Print("The error",err)
+		respondError(w, http.StatusBadRequest, "on-chain verification failed",)
+		return
+	}
+
+	// 2. Validate Source
+	if txInfo.Sender != env.Get().StakeTreasuryOwnerAddr {
+		respondError(w, http.StatusForbidden, "invalid unstake source")
+		return
+	}
+
+	// 3. Service Orchestration
+	email := contextutils.GetUserEmail(r.Context())
+	err = c.svc.ValidateAndUnstake(r.Context(), email, req.Pubkey, req.Signature, txInfo.Amount)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{"status": "success"})
+}
+
+func (c *RunnerController) ActivateNode(w http.ResponseWriter, r *http.Request) {
+    var req struct {
+        Pubkey string `json:"public_key"`
+        PDA    string `json:"node_pda"`
+    }
+
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        respondError(w, http.StatusBadRequest, "invalid request body")
+        return
+    }
+
+    email := contextutils.GetUserEmail(r.Context())
+    if email == "" {
+        respondError(w, http.StatusUnauthorized, "unauthorized")
+        return
+    }
+
+    // Execute service logic
+    err := c.svc.ActivateNode(r.Context(), email, req.Pubkey, req.PDA)
+    if err != nil {
+        respondError(w, http.StatusUnprocessableEntity, err.Error())
+        return
+    }
+
+    respondJSON(w, http.StatusOK, map[string]string{"status": "activated"})
 }

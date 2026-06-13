@@ -4,13 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 
 	"github.com/everestp/deping-client-service/config/env"
 	"github.com/everestp/deping-client-service/db/repositories"
 	"github.com/everestp/deping-client-service/dto"
+	"github.com/everestp/deping-client-service/solana"
+
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/redis/go-redis/v9"
+		solgo "github.com/gagliardetto/solana-go"
+
 )
 
 type NodeRunnerService interface {
@@ -18,6 +23,9 @@ type NodeRunnerService interface {
 	GetByPubkey(ctx context.Context, pubkey string) (*dto.RunnerResponse, error)
 	GetByEmailAndPubkey(ctx context.Context, pubkey , email string) (*dto.RunnerResponse, error)
 	Heartbeat(ctx context.Context, pubkey string) error
+	ValidateAndStake(ctx context.Context, email string, pubkey string, txSig string, amount uint64) error
+    ValidateAndUnstake(ctx context.Context, email string, pubkey string, txSig string, amount uint64) error
+	ActivateNode(ctx context.Context, email, pubkey, pda string) error
 }
 
 type runnerService struct {
@@ -26,6 +34,8 @@ type runnerService struct {
 	rabbitCh    *amqp.Channel
 	cfg         *env.Config
 	memRegistry *MemoryRegistry // Direct link to our real-time in-memory tracking pool
+	solanaClient   *solana.Client
+	logger *slog.Logger
 }
 
 // NewRunnerService matches the exact signature called by your app's main orchestration wireframe.
@@ -35,6 +45,9 @@ func NewRunnerService(
 	rabbitCh *amqp.Channel,
 	cfg *env.Config,
 	memRegistry *MemoryRegistry,
+	solanaClient *solana.Client,
+	logger *slog.Logger,
+
 ) NodeRunnerService {
 	return &runnerService{
 		store:       store,
@@ -42,9 +55,31 @@ func NewRunnerService(
 		rabbitCh:    rabbitCh,
 		cfg:         cfg,
 		memRegistry: memRegistry,
+		solanaClient: solanaClient,
+		logger :logger,
 	}
 }
+func (s *runnerService) ActivateNode(ctx context.Context, email, pubkey, pda string) error {
+    // 1. Validate inputs
+   ownerPK, err := solgo.PublicKeyFromBase58(pubkey)
+    if err != nil {
+        return fmt.Errorf("invalid pubkey: %w", err)
+    }
 
+    // 2. Re-derive the expected PDA using our Solana client
+    expectedPDA, _, err := s.solanaClient.DeriveNodePDA(ownerPK, email)
+    if err != nil {
+        return fmt.Errorf("failed to derive PDA: %w", err)
+    }
+
+    // 3. Security: Check if provided PDA matches calculated PDA
+    if expectedPDA.String() != pda {
+        return fmt.Errorf("security alert: PDA mismatch")
+    }
+
+    // 4. Update the DB
+    return s.store.NodeRuunerRepo.UpdateNodePDA(ctx, email, pubkey, pda)
+}
 func (s *runnerService) Register(ctx context.Context, email string, req *dto.RegisterRunnerRequest) (*dto.RunnerResponse, error) {
 	if req.OwnerPubkey == "" || req.Region == "" {
 		return nil, errors.New("owner_pubkey and region are required")
@@ -96,21 +131,60 @@ func (s *runnerService) Heartbeat(ctx context.Context, pubkey string) error {
 
 	return nil
 }
+// ── STAKING LIFECYCLE (REPLAY PROTECTED) ──────────────────────────────────────
+
+func (s *runnerService) ValidateAndStake(ctx context.Context, email string, pubkey string, txSig string, amount uint64) error {
+    processed, err := s.store.TxRepo.IsTxProcessed(ctx, txSig)
+    if err != nil || processed {
+        return errors.New("transaction already processed or invalid")
+    }
+
+    // Atomic Update: Update DB stake AND record signature in one workflow
+    if err := s.store.NodeRuunerRepo.UpdateStake(ctx, pubkey, int64(amount)); err != nil {
+        return fmt.Errorf("stake update failed: %w", err)
+    }
+
+    user, err := s.store.Users.GetUserByEmail(ctx,email)
+    if err != nil {
+        return err
+    }
+
+    return s.store.TxRepo.ProcessPayment(ctx, user.ID, amount, txSig)
+}
+
+func (s *runnerService) ValidateAndUnstake(ctx context.Context, email string, pubkey string, txSig string, amount uint64) error {
+    processed, err := s.store.TxRepo.IsTxProcessed(ctx, txSig)
+    if err != nil || processed {
+        return errors.New("transaction already processed or invalid")
+    }
+
+    if err := s.store.NodeRuunerRepo.UpdateUnstake(ctx, pubkey, int64(amount)); err != nil {
+        return fmt.Errorf("unstake update failed: %w", err)
+    }
+
+    user, err := s.store.Users.GetUserByEmail(ctx, email)
+    if err != nil {
+        return err
+    }
+
+    return s.store.TxRepo.ProcessPayment(ctx, user.ID, amount, txSig)
+}
+
+// ── HELPERS ──────────────────────────────────────────────────────────────────
 
 func toRunnerResponse(n *repositories.RunnerNode) *dto.RunnerResponse {
-	return &dto.RunnerResponse{
-		ID:                        n.ID,
-		OwnerPubkey:               n.OwnerPubkey,
-		OwnerEmail:     n.OwnerEmail,
-		Region:                    n.Region,
-		NodePubkey:                n.NodePubkey,
-
-		Latitude:                   n.Latitude,
-		Longitude:                 n.Longitude,
-		OffchainAccumulatedTokens: n.OffchainAccumulatedTokens,
-		TotalEarnedTokensAllTime:  n.TotalEarnedTokensAllTime,
-		PendingSolanaSync:         n.PendingSolanaSync,
-		NodePda:   n.NodePda.String,
-		IsValidator: n.IsValidator,
-	}
+    return &dto.RunnerResponse{
+        ID:                        n.ID,
+        OwnerPubkey:               n.OwnerPubkey,
+        OwnerEmail:                n.OwnerEmail,
+        Region:                    n.Region,
+        NodePubkey:                n.NodePubkey,
+        Latitude:                  n.Latitude,
+        Longitude:                 n.Longitude,
+        OffchainAccumulatedTokens: n.OffchainAccumulatedTokens,
+        TotalEarnedTokensAllTime:  n.TotalEarnedTokensAllTime,
+        PendingSolanaSync:         n.PendingSolanaSync,
+        NodePda:                   n.NodePda.String,
+        IsValidator:               n.IsValidator,
+    }
 }
