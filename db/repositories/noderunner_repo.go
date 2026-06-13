@@ -62,7 +62,7 @@ func (r *nodeRunnerRepo) UpdateNodePDA(ctx context.Context, email string, pubkey
     query := `
         UPDATE runner_nodes 
         SET node_pda = $1 
-        WHERE node_pubkey = $2 
+        WHERE owner_pubkey = $2 
         AND owner_email = $3 
         AND deleted_at IS NULL`
 
@@ -124,7 +124,7 @@ func (r *nodeRunnerRepo) UpdateUnstake(ctx context.Context, pubkey string, amoun
         UPDATE runner_nodes 
         SET staked_amount = staked_amount - $1,
             is_validator = CASE WHEN (staked_amount - $1) >= 20000000000 THEN TRUE ELSE FALSE END
-        WHERE node_pubkey = $2 AND deleted_at IS NULL`
+        WHERE owner_pubkey = $2 AND deleted_at IS NULL`
     
     _, err := r.db.ExecContext(ctx, query, amountRaw, pubkey)
     return err
@@ -132,11 +132,11 @@ func (r *nodeRunnerRepo) UpdateUnstake(ctx context.Context, pubkey string, amoun
 
 // DeleteNode soft-deletes the record when the node is fully closed
 func (r *nodeRunnerRepo) DeleteNode(ctx context.Context, pubkey string) error {
-    query := `UPDATE runner_nodes SET deleted_at = NOW() WHERE node_pubkey = $1`
-    _, err := r.db.ExecContext(ctx, query, pubkey)
-    return err
+	// Targets the specific node_pda or instance pubkey to avoid clearing the whole account
+	query := `DELETE FROM runner_nodes WHERE owner_pubkey = $1`
+	_, err := r.db.ExecContext(ctx, query, pubkey)
+	return err
 }
-
 // =========================================
 // REGISTER
 // =========================================

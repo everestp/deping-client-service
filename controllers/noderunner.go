@@ -203,6 +203,27 @@ func (c *RunnerController) ValidateUnstake(w http.ResponseWriter, r *http.Reques
 
 	respondJSON(w, http.StatusOK, map[string]string{"status": "success"})
 }
+func (c *RunnerController) DeleteRunner(w http.ResponseWriter, r *http.Request) {
+	// 1. Decode the request body using your standard shared DTO layout
+	var req dto.DeleteNodeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+
+	// 2. Extract user email from the custom context utility tool
+	email := contextutils.GetUserEmail(r.Context())
+
+	// 3. Service Orchestration to completely wipe the node record
+	err := c.svc.CompletelyDeleteNode(r.Context(), email, req.Pubkey)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// 4. Return standard structured success string status response
+	respondJSON(w, http.StatusOK, map[string]string{"status": "success"})
+}
 
 func (c *RunnerController) ActivateNode(w http.ResponseWriter, r *http.Request) {
     var req struct {

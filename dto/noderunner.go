@@ -41,6 +41,11 @@ type StakeRequest struct {
     Pubkey    string `json:"public_key"`
 }
 
+type DeleteNodeRequest struct {
+  
+    NodePda  string  `json:"node_pda"`
+    Pubkey    string `json:"public_key"`
+}
 type TransactionStatusResponse struct {
     Status  string `json:"status"`
     Message string `json:"message"`

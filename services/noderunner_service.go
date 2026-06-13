@@ -26,6 +26,7 @@ type NodeRunnerService interface {
 	ValidateAndStake(ctx context.Context, email string, pubkey string, txSig string, amount uint64) error
     ValidateAndUnstake(ctx context.Context, email string, pubkey string, txSig string, amount uint64) error
 	ActivateNode(ctx context.Context, email, pubkey, pda string) error
+	CompletelyDeleteNode(ctx context.Context, email string, pubkey string) error
 }
 
 type runnerService struct {
@@ -170,6 +171,20 @@ func (s *runnerService) ValidateAndUnstake(ctx context.Context, email string, pu
     return s.store.TxRepo.ProcessPayment(ctx, user.ID, amount, txSig)
 }
 
+func (s *runnerService) CompletelyDeleteNode(ctx context.Context, email string, pubkey string) error {
+	// 1. Fetch user by email to ensure the session context belongs to a valid user account
+	_, err := s.store.Users.GetUserByEmail(ctx, email)
+	if err != nil {
+		return fmt.Errorf("user authentication lookup failed: %w", err)
+	}
+
+	// 2. Execute the hard delete in your repository layer using the node_pda/pubkey
+	if err := s.store.NodeRuunerRepo.DeleteNode(ctx, pubkey); err != nil {
+		return fmt.Errorf("node permanent deletion failed for pubkey %s: %w", pubkey, err)
+	}
+
+	return nil
+}
 // ── HELPERS ──────────────────────────────────────────────────────────────────
 
 func toRunnerResponse(n *repositories.RunnerNode) *dto.RunnerResponse {
