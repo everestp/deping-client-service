@@ -71,7 +71,7 @@ func loadConfig() (*Config, error) {
 
 	cfg := &Config{
 		DatabaseURL:         dbURL,
-		HTTPPort:            getEnvOr("HTTP_PORT", "8080"),
+		HTTPPort:            getEnvOr("HTTP_PORT", "8081"),
 		JWTSecret:           jwtSecret,
 		RabbitMQURL:         rabbitURL,
 		RedisAddr:           redisAddr,
