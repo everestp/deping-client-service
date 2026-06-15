@@ -3,6 +3,7 @@ package controllers
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 
@@ -29,6 +30,7 @@ func NewTelegramController(ts services.TelegramService) *TelegramController {
 // Returns a verification code the user must send to the bot.
 func (tc *TelegramController) InitiateLink(w http.ResponseWriter, r *http.Request) {
     userID := userIDFromContext(r.Context())
+	
 
     var req dto.LinkTelegramRequest
     if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.TelegramUsername == "" {
@@ -48,7 +50,23 @@ func (tc *TelegramController) InitiateLink(w http.ResponseWriter, r *http.Reques
 
     writeJSON(w, http.StatusOK, resp)
 }
+func (tc *TelegramController) GetTelegramMe(w http.ResponseWriter, r *http.Request) {
+	userID := userIDFromContext(r.Context())
 
+	// Call the service layer we built in step 1
+	resp, err := tc.telegramService.GetTelegramUserStatus(r.Context(), userID)
+	if err != nil {
+		log.Printf("[ERROR] GetTelegramUserStatus failed for userID %d: %v", userID, err)
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
+			"success": false,
+			"error":   "Internal server error",
+		})
+		return
+	}
+
+	// Always returns 200 OK with success: true. Data will either be the user object or null.
+	writeJSON(w, http.StatusOK, resp)
+}
 // GET /api/telegram/credits
 // Returns the authenticated user's credit status.
 func (tc *TelegramController) GetCredits(w http.ResponseWriter, r *http.Request) {

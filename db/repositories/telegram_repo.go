@@ -24,6 +24,13 @@ type TelegramUser struct {
 	LastRemindedAt   sql.NullTime
 	CreatedAt        time.Time
 }
+type TelegramUserMe struct {
+	ID               int
+	UserID           int
+	TelegramUsername sql.NullString
+	IsVerified       bool
+	
+}
 
 type TelegramCredit struct {
 	UserID           int
@@ -61,6 +68,7 @@ type TelegramRepository interface {
 	VerifyTelegramUser(ctx context.Context, userID int, chatID int64, username string) error
 	GetTelegramUserByUsername(ctx context.Context, username string) (*TelegramUser, error)
 	UpdateChatID(ctx context.Context, userID int, chatID int64) error
+	GetTelegramForUserForMeByUserID(ctx context.Context, userID int) (*TelegramUserMe, error)
 
 
 	// Credits
@@ -173,7 +181,29 @@ func (r *postgressTelegramRepo) GetTelegramUserByUserID(ctx context.Context, use
 		WHERE user_id = $1 AND deleted_at IS NULL`
 	return r.scanTelegramUser(r.db.QueryRowContext(ctx, q, userID))
 }
+func (r *postgressTelegramRepo) GetTelegramForUserForMeByUserID(ctx context.Context, userID int) (*TelegramUserMe, error) {
+    const q = `
+        SELECT id, user_id, telegram_username, is_verified
+        FROM telegram_users
+        WHERE user_id = $1 AND deleted_at IS NULL`
+    return r.scanTelegramUserMe(r.db.QueryRowContext(ctx, q, userID))
+}
 
+func (r *postgressTelegramRepo) scanTelegramUserMe(row *sql.Row) (*TelegramUserMe, error) {
+    u := &TelegramUserMe{}
+    
+    // Exactly 4 destination variables matching your 4 SELECT columns
+    err := row.Scan(
+        &u.ID, 
+        &u.UserID, 
+        &u.TelegramUsername, 
+        &u.IsVerified,
+    )
+    if err == sql.ErrNoRows {
+        return nil, nil
+    }
+    return u, err
+}
 func (r *postgressTelegramRepo) GetTelegramUserByCode(ctx context.Context, code string) (*TelegramUser, error) {
 	const q = `
 		SELECT id, user_id, telegram_chat_id, telegram_username, verification_code,

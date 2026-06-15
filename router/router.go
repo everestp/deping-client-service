@@ -66,11 +66,13 @@ func SetupRouter(
     mux.Handle("PUT /api/v1/monitors/{id}/pause", auth(http.HandlerFunc(monitorCtrl.Pause)))
     mux.Handle("PUT /api/v1/monitors/{id}/resume", auth(http.HandlerFunc(monitorCtrl.Resume)))
     mux.Handle("DELETE /api/v1/monitors/{id}", auth(http.HandlerFunc(monitorCtrl.Delete)))
+        mux.Handle("GET /api/v1/monitors/{id}/stats", auth(http.HandlerFunc(monitorCtrl.Stats)))
 
 
 
     mux.Handle("POST /api/v1/telegram/link", auth(http.HandlerFunc(telegramCtrl.InitiateLink)))
 	 mux.Handle("POST /api/v1/telegram/credits/add", auth(http.HandlerFunc(telegramCtrl.AddCredits)))
+ mux.Handle("GET /api/v1/telegram/me", auth(http.HandlerFunc(telegramCtrl.GetTelegramMe)))
 
     // ─────────────────────────────────────────────────────────────────────
     // Fallback

@@ -21,6 +21,7 @@ type TelegramService interface {
     ToggleNotification(ctx context.Context, userID int, monitorID string, enabled bool) error
     GetNotificationStatus(ctx context.Context, userID int, monitorID string) (bool, error)
     GetUserIDFromChatID(ctx context.Context, chatID int64) (int, error)
+     GetTelegramUserStatus(ctx context.Context, userID int) (*dto.ResponseEnvelope, error)
 }
 
 type telegramService struct {
@@ -168,6 +169,28 @@ func (s *telegramService) GetUserIDFromChatID(ctx context.Context, chatID int64)
         return 0, fmt.Errorf("telegram account not linked")
     }
     return tu.UserID, nil
+}
+func (s *telegramService) GetTelegramUserStatus(ctx context.Context, userID int) (*dto.ResponseEnvelope, error) {
+
+    user, err := s.repo.GetTelegramForUserForMeByUserID(ctx, userID)
+    if err != nil {
+        // This is an actual DB crash or connection error
+        return &dto.ResponseEnvelope{Success: false, Data: nil}, err
+    }
+
+    // If user is nil (No rows matched), this successfully signals your frontend
+    if user == nil {
+        return &dto.ResponseEnvelope{
+            Success: true,
+            Data:    nil, 
+        }, nil
+    }
+
+    // If data exists, return it inside the data wrapper
+    return &dto.ResponseEnvelope{
+        Success: true,
+        Data:    user,
+    }, nil
 }
 
 func generateVerificationCode() (string, error) {

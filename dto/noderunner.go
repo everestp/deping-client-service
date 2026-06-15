@@ -50,3 +50,8 @@ type TransactionStatusResponse struct {
     Status  string `json:"status"`
     Message string `json:"message"`
 }
+
+type ResponseEnvelope struct {
+    Success bool        `json:"success"`
+    Data    interface{} `json:"data"`
+}
