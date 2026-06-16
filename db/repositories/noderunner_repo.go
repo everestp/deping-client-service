@@ -63,7 +63,7 @@ func (r *nodeRunnerRepo) UpdateNodePDA(ctx context.Context, email string, pubkey
         UPDATE runner_nodes 
         SET node_pda = $1 
         WHERE owner_pubkey = $2 
-        AND owner_email = $3 
+        AND owner_email = $3  
         AND deleted_at IS NULL`
 
     result, err := r.db.ExecContext(ctx, query, pda, pubkey, email)
@@ -111,7 +111,7 @@ func (r *nodeRunnerRepo) UpdateStake(ctx context.Context, pubkey string, amountR
     query := `
         UPDATE runner_nodes 
         SET staked_amount = staked_amount + $1,
-            is_validator = CASE WHEN (staked_amount + $1) >= 20000000000 THEN TRUE ELSE FALSE END
+            is_validator = CASE WHEN (staked_amount + $1) >= 20.000000000 THEN TRUE ELSE FALSE END
         WHERE owner_pubkey = $2 AND deleted_at IS NULL`
     
     _, err := r.db.ExecContext(ctx, query, amountRaw, pubkey)
