@@ -30,6 +30,7 @@ type TelegramCreditStatus struct {
 type AddCreditsRequest struct {
 	Amount       int    `json:"expected_amount"`        // Credits to add
 	TxSignature  string `json:"signature"`  // Solana tx for audit
+	CreditBalance int `json:"credit_balance"`
 }
 
 // ── Monitor Notification Toggle ───────────────────────────────────────────

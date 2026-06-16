@@ -73,6 +73,7 @@ func SetupRouter(
     mux.Handle("POST /api/v1/telegram/link", auth(http.HandlerFunc(telegramCtrl.InitiateLink)))
 	 mux.Handle("POST /api/v1/telegram/credits/add", auth(http.HandlerFunc(telegramCtrl.AddCredits)))
  mux.Handle("GET /api/v1/telegram/me", auth(http.HandlerFunc(telegramCtrl.GetTelegramMe)))
+ mux.Handle("GET /api/v1/telegram/credits", auth(http.HandlerFunc(telegramCtrl.GetCredits)))
 
     // ─────────────────────────────────────────────────────────────────────
     // Fallback

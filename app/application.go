@@ -70,14 +70,14 @@ func New(cfg *env.Config) (*Application, error) {
 	// 2. Setup Storage Layer
 	storage := repositories.NewStorage(db)
 	memRegistry := services.NewMemoryRegistry()
-	solanaClient, err := solana.NewSolanaClient(cfg.SolanaRPCURL, cfg.ProgramID)
-if err != nil {
-  log.Error("solana client error: %v", err)
-}
+solanaClient, err := solana.NewSolanaClient(cfg.SolanaRPCURL, cfg.ProgramID)
+    if err != nil {
+        return nil, fmt.Errorf("critical failure initializing solana rpc gateway: %w", err)
+    }
 
 	// 3. Initialize Domain Services
 	userSvc := services.NewUserService(storage.Users, cfg.JWTSecret)
-	teleSvc := services.NewTelegramService(storage.Telegram, cfg.TelegramBotUsername, log, solanaClient)
+	teleSvc := services.NewTelegramService(storage.Telegram, storage.TxRepo,cfg.TelegramBotUsername, log, solanaClient)
 	monitorSvc := services.NewMonitorService(storage, rdb, rabbitCh, cfg)
 runnerSvc := services.NewRunnerService(storage, rdb, rabbitCh, cfg, memRegistry,solanaClient,log)
 	// 4. Initialize Bot & Alerts

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/everestp/deping-client-service/dto"
+	"github.com/lib/pq"
 	_ "github.com/lib/pq"
 )
 
@@ -109,69 +110,57 @@ func NewTelegramRepository(db *sql.DB) TelegramRepository {
 // ── Account Linking ───────────────────────────────────────────────────────
 
 func (r *postgressTelegramRepo) UpsertTelegramUser(
-	ctx context.Context,
-	userID int,
-	username string,
-	code string,
+    ctx context.Context,
+    userID int,
+    username string,
+    code string,
 ) error {
 
-	// Validate user exists first
-	var exists bool
+    // 1. Validate user exists first (Your existing check)
+    var exists bool
+    checkQuery := `
+        SELECT EXISTS(
+            SELECT 1 FROM users WHERE id = $1 AND deleted_at IS NULL
+        )
+    `
+    err := r.db.QueryRowContext(ctx, checkQuery, userID).Scan(&exists)
+    if err != nil {
+        return fmt.Errorf("failed checking user existence: %w", err)
+    }
+    if !exists {
+        return fmt.Errorf("user does not exist: %d", userID)
+    }
 
-	checkQuery := `
-		SELECT EXISTS(
-			SELECT 1
-			FROM users
-			WHERE id = $1
-			  AND deleted_at IS NULL
-		)
-	`
+    // 2. The Updated Upsert Query
+    query := `
+        INSERT INTO telegram_users (
+            user_id,
+            telegram_username,
+            verification_code,
+            is_verified
+        )
+        VALUES ($1, $2, $3, FALSE)
+        ON CONFLICT (user_id)
+        DO UPDATE SET
+            telegram_username = EXCLUDED.telegram_username,
+            verification_code = EXCLUDED.verification_code,
+            is_verified       = FALSE,
+            updated_at        = NOW()
+    `
 
-	err := r.db.QueryRowContext(
-		ctx,
-		checkQuery,
-		userID,
-	).Scan(&exists)
+    _, err = r.db.ExecContext(ctx, query, userID, username, code)
+    if err != nil {
+        // 3. Catch the Unique Constraint Violation Error
+        if pqErr, ok := err.(*pq.Error); ok {
+            // "23505" is the PostgreSQL error code for unique_violation
+            if pqErr.Code == "23505" && pqErr.Constraint == "unique_telegram_username" {
+                return fmt.Errorf("username already linked with other account")
+            }
+        }
+        return fmt.Errorf("telegram upsert failed: %w", err)
+    }
 
-	if err != nil {
-		return fmt.Errorf("failed checking user existence: %w", err)
-	}
-
-	if !exists {
-		return fmt.Errorf("user does not exist: %d", userID)
-	}
-
-	// Upsert telegram linkage
-	query := `
-		INSERT INTO telegram_users (
-			user_id,
-			telegram_username,
-			verification_code,
-			is_verified
-		)
-		VALUES ($1, $2, $3, FALSE)
-
-		ON CONFLICT (user_id)
-		DO UPDATE SET
-			telegram_username = EXCLUDED.telegram_username,
-			verification_code = EXCLUDED.verification_code,
-			is_verified       = FALSE,
-			updated_at        = NOW()
-	`
-
-	_, err = r.db.ExecContext(
-		ctx,
-		query,
-		userID,
-		username,
-		code,
-	)
-
-	if err != nil {
-		return fmt.Errorf("telegram upsert failed: %w", err)
-	}
-
-	return nil
+    return nil
 }
 func (r *postgressTelegramRepo) GetTelegramUserByUserID(ctx context.Context, userID int) (*TelegramUser, error) {
 	const q = `
@@ -183,9 +172,12 @@ func (r *postgressTelegramRepo) GetTelegramUserByUserID(ctx context.Context, use
 }
 func (r *postgressTelegramRepo) GetTelegramForUserForMeByUserID(ctx context.Context, userID int) (*TelegramUserMe, error) {
     const q = `
-        SELECT id, user_id, telegram_username, is_verified
-        FROM telegram_users
-        WHERE user_id = $1 AND deleted_at IS NULL`
+     SELECT id, user_id, telegram_username, is_verified
+    FROM telegram_users
+    WHERE user_id = $1 
+      AND is_verified = TRUE 
+      AND deleted_at IS NULL
+	  `
     return r.scanTelegramUserMe(r.db.QueryRowContext(ctx, q, userID))
 }
 

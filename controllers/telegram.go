@@ -37,6 +37,7 @@ func (tc *TelegramController) InitiateLink(w http.ResponseWriter, r *http.Reques
         writeJSON(w, http.StatusBadRequest, dto.ErrorResponse{Error: "telegram_username is required"})
         return
     }
+	fmt.Println("tg=",userID,req.TelegramUsername)
 
     resp, err := tc.telegramService.InitiateLink(r.Context(), userID, req.TelegramUsername)
     if err != nil {
@@ -89,19 +90,23 @@ func (tc *TelegramController) AddCredits(w http.ResponseWriter, r *http.Request)
 
 	var req dto.AddCreditsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Amount <= 0 || req.TxSignature == "" {
-		writeJSON(w, http.StatusBadRequest, dto.ErrorResponse{Error: "amount and tx_signature are required"})
+		writeJSON(w, http.StatusInternalServerError, dto.ErrorResponse{
+			Error: fmt.Sprintf("could not add credits: %v", err),
+		})
 		return
 	}
 
-	newBalance, err := tc.telegramService.AddPurchasedCredits(r.Context(), userID, req.Amount, req.TxSignature)
+	newBalance, err := tc.telegramService.AddPurchasedCredits(r.Context(), userID, req.Amount, req.TxSignature,req.CreditBalance)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, dto.ErrorResponse{Error: "could not add credits"})
+		writeJSON(w, http.StatusInternalServerError, dto.ErrorResponse{
+			Error: fmt.Sprintf("could not add credits: %v", err),
+		})
 		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"message":           "Credits added successfully",
-		"purchased_credits": newBalance,
+		"toal_avaible_credit": newBalance,
 	})
 }
 

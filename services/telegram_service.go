@@ -17,7 +17,7 @@ type TelegramService interface {
     InitiateLink(ctx context.Context, userID int, username string) (*dto.LinkTelegramResponse, error)
     VerifyLink(ctx context.Context, code string, chatID int64, chatUsername string) (int, error)
     GetCreditStatus(ctx context.Context, userID int) (*dto.TelegramCreditStatus, error)
-    AddPurchasedCredits(ctx context.Context, userID int, amount int, txSig string) (int, error)
+    AddPurchasedCredits(ctx context.Context, userID int, amount int, txSig string, creditBalance int) (int, error)
     ToggleNotification(ctx context.Context, userID int, monitorID string, enabled bool) error
     GetNotificationStatus(ctx context.Context, userID int, monitorID string) (bool, error)
     GetUserIDFromChatID(ctx context.Context, chatID int64) (int, error)
@@ -25,7 +25,7 @@ type TelegramService interface {
 }
 
 type telegramService struct {
-    repo          repositories.TelegramRepository
+    telegram_repo          repositories.TelegramRepository
     tx_repo       repositories.TransactionRepository
     solanaClient  *solana.Client // Explicitly type your client
     botUsername   string
@@ -33,30 +33,36 @@ type telegramService struct {
 
 
 }
-func NewTelegramService(repo repositories.TelegramRepository, botUsername string, log *slog.Logger , solanaClient *solana.Client) TelegramService {
-    return &telegramService{repo: repo, botUsername: botUsername, log: log,solanaClient:solanaClient }
+func NewTelegramService(_telegram_repo repositories.TelegramRepository,_tx_repo repositories.TransactionRepository, botUsername string, log *slog.Logger , solanaClient *solana.Client) TelegramService {
+    return &telegramService{ telegram_repo:_telegram_repo, tx_repo:_tx_repo , botUsername: botUsername, log: log,solanaClient:solanaClient }
 }
-
 func (s *telegramService) InitiateLink(ctx context.Context, userID int, username string) (*dto.LinkTelegramResponse, error) {
+    // 1. Generate the random verification OTP code
     code, err := generateVerificationCode()
+    fmt.Println("tg code generated =", code) // Keep your debug log
     if err != nil {
         return nil, fmt.Errorf("failed to generate code: %w", err)
     }
 
-    // Upsert ensures the user record exists and resets verification status
-    if err := s.repo.UpsertTelegramUser(ctx, userID, username, code); err != nil {
+    // 2. Call the repository to save or update the linkage details
+    if err := s.telegram_repo.UpsertTelegramUser(ctx, userID, username, code); err != nil {
+        // If the username is already taken by someone else, pass the specific error straight up
+        if err.Error() == "username already linked with other account" {
+            return nil, err
+        }
+        // Return standard internal error for any other DB issues
         return nil, fmt.Errorf("repository upsert failed: %w", err)
     }
 
+    // 3. Construct and return the successful response DTO
     return &dto.LinkTelegramResponse{
         VerificationCode: code,
         BotUsername:      "@" + s.botUsername,
         Message:          "Verification code generated successfully.",
     }, nil
 }
-
 func (s *telegramService) VerifyLink(ctx context.Context, code string, chatID int64, chatUsername string) (int, error) {
-    tu, err := s.repo.GetTelegramUserByCode(ctx, code)
+    tu, err := s.telegram_repo.GetTelegramUserByCode(ctx, code)
     if err != nil {
         return 0, fmt.Errorf("lookup code: %w", err)
     }
@@ -64,7 +70,7 @@ func (s *telegramService) VerifyLink(ctx context.Context, code string, chatID in
         return 0, fmt.Errorf("invalid or expired verification code")
     }
 
-    if err := s.repo.VerifyTelegramUser(ctx, tu.UserID, chatID, chatUsername); err != nil {
+    if err := s.telegram_repo.VerifyTelegramUser(ctx, tu.UserID, chatID, chatUsername); err != nil {
         return 0, fmt.Errorf("verify user: %w", err)
     }
 
@@ -73,7 +79,7 @@ func (s *telegramService) VerifyLink(ctx context.Context, code string, chatID in
 }
 
 func (s *telegramService) GetCreditStatus(ctx context.Context, userID int) (*dto.TelegramCreditStatus, error) {
-    c, err := s.repo.GetCreditStatus(ctx, userID)
+    c, err := s.telegram_repo.GetCreditStatus(ctx, userID)
     if err != nil {
         return nil, err
     }
@@ -96,6 +102,7 @@ func (s *telegramService) AddPurchasedCredits(
 	userID int,
 	amount int,
 	txSig string,
+    creditBalance int,
 ) (int, error) {
 
 	// 1. Prevent duplicate processing
@@ -142,15 +149,20 @@ func (s *telegramService) AddPurchasedCredits(
 	if err != nil {
 		return 0, fmt.Errorf("failed to finalize transaction: %w", err)
 	}
-
+   
+   amount , err = s.telegram_repo.AddPurchasedCredits(ctx,userID,creditBalance,txSig)
+  
+  	if err != nil {
+		return 0, fmt.Errorf("failed to  update DB: %w", err)
+	}
 	return amount, nil
 }
 func (s *telegramService) ToggleNotification(ctx context.Context, userID int, monitorID string, enabled bool) error {
-    return s.repo.UpsertSubscription(ctx, userID, monitorID, enabled)
+    return s.telegram_repo.UpsertSubscription(ctx, userID, monitorID, enabled)
 }
 
 func (s *telegramService) GetNotificationStatus(ctx context.Context, userID int, monitorID string) (bool, error) {
-    sub, err := s.repo.GetSubscription(ctx, userID, monitorID)
+    sub, err := s.telegram_repo.GetSubscription(ctx, userID, monitorID)
     if err != nil {
         return false, err
     }
@@ -161,7 +173,7 @@ func (s *telegramService) GetNotificationStatus(ctx context.Context, userID int,
 }
 
 func (s *telegramService) GetUserIDFromChatID(ctx context.Context, chatID int64) (int, error) {
-    tu, err := s.repo.GetTelegramUserByChatID(ctx, chatID)
+    tu, err := s.telegram_repo.GetTelegramUserByChatID(ctx, chatID)
     if err != nil {
         return 0, err
     }
@@ -172,7 +184,7 @@ func (s *telegramService) GetUserIDFromChatID(ctx context.Context, chatID int64)
 }
 func (s *telegramService) GetTelegramUserStatus(ctx context.Context, userID int) (*dto.ResponseEnvelope, error) {
 
-    user, err := s.repo.GetTelegramForUserForMeByUserID(ctx, userID)
+    user, err := s.telegram_repo.GetTelegramForUserForMeByUserID(ctx, userID)
     if err != nil {
         // This is an actual DB crash or connection error
         return &dto.ResponseEnvelope{Success: false, Data: nil}, err
