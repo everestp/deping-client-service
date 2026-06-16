@@ -307,13 +307,7 @@ func (r *postgressTelegramRepo) AddPurchasedCredits(ctx context.Context, userID 
 	if err := tx.QueryRowContext(ctx, q, userID, amount).Scan(&newBalance); err != nil {
 		return 0, err
 	}
-	// Audit: store tx signature in solana_sync_events reuse pattern
-	const audit = `
-		INSERT INTO solana_sync_events (runner_pubkey, tx_signature, amount_raw)
-		VALUES ('telegram_credit:' || $1::TEXT, $2, $3)`
-	if _, err := tx.ExecContext(ctx, audit, userID, txSignature, amount); err != nil {
-		return 0, err
-	}
+
 	return newBalance, tx.Commit()
 }
 
