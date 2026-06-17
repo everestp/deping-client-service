@@ -4,13 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/everestp/deping-client-service/config/env"
 	"github.com/everestp/deping-client-service/db/repositories"
 	"github.com/everestp/deping-client-service/dto"
+	"github.com/everestp/deping-client-service/solana"
 )
 
 // =========================
@@ -35,6 +38,8 @@ type UserService interface {
 	Login(ctx context.Context, req dto.LoginRequest) (*dto.AuthResponse, error)
 	GetUserInfo(ctx context.Context, userID int) (*dto.UserInfo, error)
 	ValidateToken(tokenStr string) (int, error)
+	AddMonitorPurchasedCredits(ctx context.Context, userID int, amount int, txSig string, creditBalance int) (int, error)
+
 }
 
 // =========================
@@ -44,12 +49,18 @@ type UserService interface {
 type userService struct {
 	repo      repositories.UserRepository
 	jwtSecret []byte
+	tx_repo repositories.TransactionRepository
+	solanaClient *solana.Client
+	 log           *slog.Logger
 }
 
-func NewUserService(repo repositories.UserRepository, jwtSecret string) UserService {
+func NewUserService(_repo repositories.UserRepository, jwtSecret string, _tx_repo repositories.TransactionRepository,log *slog.Logger , solanaClient *solana.Client) UserService {
 	return &userService{
-		repo:      repo,
+		repo:      _repo,
 		jwtSecret: []byte(jwtSecret),
+		tx_repo: _tx_repo,
+		solanaClient: solanaClient,
+
 	}
 }
 
@@ -144,6 +155,7 @@ func (s *userService) GetUserInfo(ctx context.Context, userID int) (*dto.UserInf
 		ID:           user.ID,
 		Email:        user.Email,
 		WalletPubkey: user.WalletPubkey,
+		MonitorCreditBalance : user.MonitorCreditBalance,
 	}, nil
 }
 
@@ -214,4 +226,65 @@ func (s *userService) generateToken(userID int, email string) (string, error) {
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString(s.jwtSecret)
+}
+
+func (s *userService) AddMonitorPurchasedCredits(
+	ctx context.Context,
+	userID int,
+	amount int,
+	txSig string,
+    creditBalance int,
+) (int, error) {
+
+	// 1. Prevent duplicate processing
+	processed, err := s.tx_repo.IsTxProcessed(ctx, txSig)
+	if err != nil {
+		return 0, err
+	}
+
+	if processed {
+		return 0, errors.New("transaction already processed")
+	}
+
+	// 2. Fetch blockchain data (MINT-AWARE)
+	txInfo, err := s.solanaClient.GetTransferInfo(ctx, txSig)
+	if err != nil {
+		return 0, fmt.Errorf("failed to verify transaction: %w", err)
+	}
+
+	// 3. Treasury wallet (must be receiver)
+	treasuryAddress := env.Get().TreasuryOwnerAddr
+
+	if txInfo.Receiver != treasuryAddress {
+		return 0, errors.New("payment sent to wrong treasury address")
+	}
+
+	// 4. SAFE AMOUNT CHECK (NO FLOAT)
+	expected := uint64(amount)
+
+	if uint64(txInfo.Amount) != expected {
+		return 0, fmt.Errorf(
+			"amount mismatch expected=%d got=%d",
+			expected,
+			txInfo.Amount,
+		)
+	}
+
+	// 5. Commit transaction
+	err = s.tx_repo.ProcessPayment(
+		ctx,
+		userID,
+		uint64(amount),
+		txSig,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("failed to finalize transaction: %w", err)
+	}
+   
+   amount , err = s.repo.AddMonitorPurchasedCredits(ctx,userID,creditBalance,txSig)
+  
+  	if err != nil {
+		return 0, fmt.Errorf("failed to  update DB: %w", err)
+	}
+	return amount, nil
 }

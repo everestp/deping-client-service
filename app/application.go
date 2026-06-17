@@ -76,7 +76,7 @@ solanaClient, err := solana.NewSolanaClient(cfg.SolanaRPCURL, cfg.ProgramID)
     }
 
 	// 3. Initialize Domain Services
-	userSvc := services.NewUserService(storage.Users, cfg.JWTSecret)
+	userSvc := services.NewUserService(storage.Users, cfg.JWTSecret,storage.TxRepo,log,solanaClient)
 	teleSvc := services.NewTelegramService(storage.Telegram, storage.TxRepo,cfg.TelegramBotUsername, log, solanaClient)
 	monitorSvc := services.NewMonitorService(storage, rdb, rabbitCh, cfg)
 runnerSvc := services.NewRunnerService(storage, rdb, rabbitCh, cfg, memRegistry,solanaClient,log)

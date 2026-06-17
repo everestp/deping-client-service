@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/everestp/deping-client-service/dto"
@@ -64,6 +65,7 @@ func (uc *UserController) Me(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, dto.ErrorResponse{Error: "unauthorized"})
 		return
 	}
+	
 
 	info, err := uc.userService.GetUserInfo(r.Context(), userID)
 	if err != nil {
@@ -72,4 +74,46 @@ func (uc *UserController) Me(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, info)
+}
+
+// GET /api/user/me
+func (uc *UserController) UserMe(w http.ResponseWriter, r *http.Request) {
+	userID := userIDFromContext(r.Context())
+	if userID == 0 {
+		writeJSON(w, http.StatusUnauthorized, dto.ErrorResponse{Error: "unauthorized"})
+		return
+	}
+	
+
+	info, err := uc.userService.GetUserInfo(r.Context(), userID)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, dto.ErrorResponse{Error: "user not found"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, info)
+}
+func (uc *UserController) AddMonitorCredits(w http.ResponseWriter, r *http.Request) {
+	userID := userIDFromContext(r.Context())
+
+	var req dto.AddCreditsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Amount <= 0 || req.TxSignature == "" {
+		writeJSON(w, http.StatusInternalServerError, dto.ErrorResponse{
+			Error: fmt.Sprintf("could not add credits: %v", err),
+		})
+		return
+	}
+
+	newBalance, err := uc.userService.AddMonitorPurchasedCredits(r.Context(), userID, req.Amount, req.TxSignature,req.CreditBalance)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, dto.ErrorResponse{
+			Error: fmt.Sprintf("could not add credits: %v", err),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"message":           "Credits added successfully",
+		"toal_avaible_credit": newBalance,
+	})
 }

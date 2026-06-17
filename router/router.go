@@ -44,6 +44,7 @@ func SetupRouter(
     mux.HandleFunc("POST /api/v1/auth/login", userCtrl.Login)
     mux.Handle("GET /api/v1/auth/me", auth(http.HandlerFunc(userCtrl.Me)))
 
+
     // ─────────────────────────────────────────────────────────────────────
     // Runner & Staking Routes
     // ─────────────────────────────────────────────────────────────────────
@@ -66,7 +67,8 @@ func SetupRouter(
     mux.Handle("PUT /api/v1/monitors/{id}/pause", auth(http.HandlerFunc(monitorCtrl.Pause)))
     mux.Handle("PUT /api/v1/monitors/{id}/resume", auth(http.HandlerFunc(monitorCtrl.Resume)))
     mux.Handle("DELETE /api/v1/monitors/{id}", auth(http.HandlerFunc(monitorCtrl.Delete)))
-        mux.Handle("GET /api/v1/monitors/{id}/stats", auth(http.HandlerFunc(monitorCtrl.Stats)))
+    mux.Handle("GET /api/v1/monitors/{id}/stats", auth(http.HandlerFunc(monitorCtrl.Stats)))
+    mux.Handle("POST /api/v1/monitor/credits/add", auth(http.HandlerFunc(userCtrl.AddMonitorCredits)))
 
 
 

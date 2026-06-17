@@ -142,6 +142,7 @@ type UserInfo struct {
 	ID           int    `json:"id"`
 	Email        string `json:"email"`
 	WalletPubkey string `json:"wallet_pubkey"`
+	MonitorCreditBalance string `json:"monitor_credit_balance"`
 }
 
 
