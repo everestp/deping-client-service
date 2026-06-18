@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -117,13 +118,22 @@ httpRouter := router.SetupRouter(
 )
 
 	// 7. CORS Configuration
-	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:5173"},
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Authorization", "Content-Type"},
-		AllowCredentials: true,
-		MaxAge: 40000,
-	})
+c := cors.New(cors.Options{
+	AllowOriginFunc: func(origin string) bool {
+		return origin == "http://localhost:5173" ||
+			strings.HasSuffix(origin, ".deping.xyz") ||
+			origin == "https://deping.xyz" ||
+			strings.HasSuffix(origin, ".vercel.app")
+	},
+	AllowedMethods: []string{
+		"GET", "POST", "PUT", "DELETE", "OPTIONS",
+	},
+	AllowedHeaders: []string{
+		"Authorization", "Content-Type",
+	},
+	AllowCredentials: true,
+	MaxAge:           40000,
+})
 
 	httpSrv := &http.Server{
 		Addr:    ":" + cfg.HTTPPort,
