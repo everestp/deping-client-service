@@ -23,6 +23,9 @@ type Config struct {
 	StakeTreasuryOwnerAddr   string
 	TreasuryOwnerAddr   string
 	ProgramID string 
+	CloudRabbitMQURL string
+	UptashRedisAddr    string
+
 }
 
 var (
@@ -67,6 +70,15 @@ func loadConfig() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+		cloudRabbitURL, err := requireEnv("CLOUD_RABBITMQ_URL")
+	if err != nil {
+		return nil, err
+	}
+
+	uptashRedisAddr, err := requireEnv("UPTASH_REDIS_ADDRESS")
+	if err != nil {
+		return nil, err
+	}
 	progID, err := requireEnv("PROGRAM_ID")
     if err != nil {
         return nil, err
@@ -83,6 +95,8 @@ func loadConfig() (*Config, error) {
 		JWTSecret:           jwtSecret,
 		RabbitMQURL:         rabbitURL,
 		RedisAddr:           redisAddr,
+		CloudRabbitMQURL: cloudRabbitURL,
+		UptashRedisAddr: uptashRedisAddr,
 		QueueName:           getEnvOr("RABBITMQ_QUEUE", "rabbit_mq_queue"),
 		TelegramBotToken:    botToken,
 		TelegramBotUsername: getEnvOr("TELEGRAM_BOT_USERNAME", "depingnetworkbot"),

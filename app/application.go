@@ -49,12 +49,14 @@ func New(cfg *env.Config) (*Application, error) {
 		return nil, fmt.Errorf("db open: %w", err)
 	}
 
-	rdb := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
-	if err := rdb.Ping(context.Background()).Err(); err != nil {
-		return nil, fmt.Errorf("redis ping: %w", err)
-	}
+opt, err := redis.ParseURL(cfg.UptashRedisAddr)
+if err != nil {
+	return nil, fmt.Errorf("parse redis url: %w", err)
+}
 
-	amqpConn, err := amqp.Dial(cfg.RabbitMQURL)
+rdb := redis.NewClient(opt)
+
+	amqpConn, err := amqp.Dial(cfg.CloudRabbitMQURL)
 	if err != nil {
 		return nil, fmt.Errorf("rabbitmq dial: %w", err)
 	}
